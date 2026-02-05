@@ -301,11 +301,15 @@ impl App {
                 vec![]
             }
             Action::Refresh => {
-                // Load both counts (from API) and workflows (filtered)
+                self.last_refresh = Some(Instant::now());
+                let mut effects = vec![Effect::LoadCounts, Effect::LoadWorkflows];
                 self.status_counts = LoadState::Loading;
                 self.workflows = LoadState::Loading;
-                self.last_refresh = Some(Instant::now());
-                vec![Effect::LoadCounts, Effect::LoadWorkflows]
+                if self.view == View::TypeList {
+                    self.type_stats = LoadState::Loading;
+                    effects.push(Effect::LoadTypeStats);
+                }
+                effects
             }
             Action::CancelWorkflow(id) => {
                 let workflow_id = if id.is_empty() {

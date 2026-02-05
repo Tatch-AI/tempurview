@@ -134,6 +134,12 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('5') => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Terminated,
                 ))),
+                KeyCode::Char('6') => Some(Action::SetStatusFilter(Some(
+                    crate::domain::WorkflowStatus::TimedOut,
+                ))),
+                KeyCode::Char('7') => Some(Action::SetStatusFilter(Some(
+                    crate::domain::WorkflowStatus::ContinuedAsNew,
+                ))),
                 KeyCode::Char('0') => Some(Action::ClearFilters),
                 // Cycle through status filters
                 KeyCode::Char(']') => Some(Action::NextStatusFilter),

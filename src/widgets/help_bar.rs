@@ -35,7 +35,7 @@ impl HelpBar {
                 ("s", "Sort"),
                 ("T", "Types"),
                 ("/", "Filter"),
-                ("1-5", "Status"),
+                ("1-7", "Status"),
                 ("r", "Refresh"),
                 ("?", "Help"),
             ],
@@ -119,6 +119,8 @@ Filtering:
   3           Filter: Failed
   4           Filter: Canceled
   5           Filter: Terminated
+  6           Filter: TimedOut
+  7           Filter: ContinuedAsNew
   0           Clear all filters
   ]           Next status filter
   [           Previous status filter
