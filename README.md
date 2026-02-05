@@ -158,11 +158,33 @@ src/
 
 ## Development
 
+### Testing Your Connection
+
+Before diving into the TUI, verify your Temporal connection:
+
+```bash
+tempurview --test-connection
+```
+
+This will check your environment variables and test the connection.
+
 ### Running Tests
 
 ```bash
+# Run all unit and integration tests (no credentials needed)
 cargo test
+
+# Run connection tests (requires TEMPORAL_* env vars)
+cargo test --test connection -- --ignored
+
+# Run a specific test
+cargo test test_mock_client
+
+# See test output
+cargo test -- --nocapture
 ```
+
+For comprehensive testing patterns and best practices, see [TESTING.md](TESTING.md).
 
 ### Running with Debug Output
 

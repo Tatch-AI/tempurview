@@ -1,20 +1,11 @@
-mod action;
-mod app;
-mod client;
-mod config;
-mod domain;
-mod event;
-mod tui;
-mod widgets;
-
-use action::{Action, DataPayload};
-use app::{App, Effect, InputMode, View};
-use client::{CliTemporalClient, MockTemporalClient, TemporalClient};
-use config::Config;
-use domain::{StatusCounts, WorkflowFilter, WorkflowStatus};
-use event::{event_to_action, EventHandler};
-use tui::Tui;
-use widgets::{FilterInput, HelpBar, HelpOverlay, StatusDashboard, WorkflowDetailWidget, WorkflowListWidget};
+use tempurview::action::{Action, DataPayload};
+use tempurview::app::{App, Effect, InputMode, View};
+use tempurview::client::{CliTemporalClient, MockTemporalClient, TemporalClient};
+use tempurview::config::Config;
+use tempurview::domain::{StatusCounts, WorkflowFilter, WorkflowStatus};
+use tempurview::event::{event_to_action, EventHandler};
+use tempurview::tui::Tui;
+use tempurview::widgets::{FilterInput, HelpBar, HelpOverlay, StatusDashboard, WorkflowDetailWidget, WorkflowListWidget};
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -40,6 +31,11 @@ async fn main() -> color_eyre::Result<()> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print_help();
         return Ok(());
+    }
+
+    // Check for test-connection flag
+    if args.iter().any(|a| a == "--test-connection") {
+        return test_connection().await;
     }
 
     let config = Config::from_args(&args)?;
@@ -134,6 +130,7 @@ fn print_help() {
     println!("    --address ADDR      Temporal server address (overrides TEMPORAL_ADDRESS)");
     println!("    --namespace NS      Temporal namespace (overrides TEMPORAL_NAMESPACE)");
     println!("    --limit N           Maximum workflows to fetch (default: 50)");
+    println!("    --test-connection   Test connection to Temporal and exit");
     println!("    -h, --help          Show this help message");
     println!();
     println!("ENVIRONMENT VARIABLES:");
@@ -151,6 +148,76 @@ fn print_help() {
     println!("    r               Refresh data");
     println!("    ?               Toggle help");
     println!("    q               Quit");
+}
+
+async fn test_connection() -> color_eyre::Result<()> {
+    println!("Testing Temporal connection...\n");
+
+    // Check environment variables
+    let address = std::env::var("TEMPORAL_ADDRESS");
+    let namespace = std::env::var("TEMPORAL_NAMESPACE");
+    let api_key = std::env::var("TEMPORAL_API_KEY");
+
+    println!("Environment variables:");
+    match &address {
+        Ok(addr) => println!("  TEMPORAL_ADDRESS:   {}", addr),
+        Err(_) => println!("  TEMPORAL_ADDRESS:   ✗ NOT SET"),
+    }
+    match &namespace {
+        Ok(ns) => println!("  TEMPORAL_NAMESPACE: {}", ns),
+        Err(_) => println!("  TEMPORAL_NAMESPACE: ✗ NOT SET"),
+    }
+    match &api_key {
+        Ok(_) => println!("  TEMPORAL_API_KEY:   ✓ (set, hidden)"),
+        Err(_) => println!("  TEMPORAL_API_KEY:   (not set - may be required for Temporal Cloud)"),
+    }
+    println!();
+
+    // Try to create client
+    let client = match CliTemporalClient::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            println!("✗ Failed to create client: {}", e);
+            println!("\nMake sure TEMPORAL_ADDRESS and TEMPORAL_NAMESPACE are set.");
+            println!("For Temporal Cloud, you also need TEMPORAL_API_KEY.");
+            std::process::exit(1);
+        }
+    };
+
+    // Try to count workflows (simplest operation)
+    println!("Attempting to connect...");
+    match client.count(None).await {
+        Ok(count) => {
+            println!("\n✓ Connection successful!");
+            println!("  Total workflows: {}", count);
+
+            // Try to get counts by status
+            println!("\nWorkflow counts by status:");
+            for status in WorkflowStatus::all() {
+                let query = format!("ExecutionStatus='{}'", status.as_query_value());
+                match client.count(Some(&query)).await {
+                    Ok(n) if n > 0 => println!("  {:15} {}", format!("{:?}:", status), n),
+                    Ok(_) => {}
+                    Err(_) => println!("  {:15} (query failed)", format!("{:?}:", status)),
+                }
+            }
+            println!("\n✓ All tests passed! Your connection is working.");
+        }
+        Err(e) => {
+            println!("\n✗ Connection failed: {}", e);
+            println!("\nTroubleshooting tips:");
+            println!("  1. Verify your TEMPORAL_ADDRESS is correct");
+            println!("     - For Temporal Cloud: <namespace>.<accountId>.tmprl.cloud:7233");
+            println!("     - For self-hosted: localhost:7233 (or your server address)");
+            println!("  2. Verify your TEMPORAL_NAMESPACE matches your Temporal namespace");
+            println!("  3. For Temporal Cloud, ensure TEMPORAL_API_KEY is valid");
+            println!("  4. Check that the 'temporal' CLI is installed and in your PATH");
+            println!("  5. Try running: temporal workflow list --address $TEMPORAL_ADDRESS --namespace $TEMPORAL_NAMESPACE");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
 }
 
 fn render(app: &App, frame: &mut Frame) {
