@@ -106,9 +106,8 @@ async fn main() -> color_eyre::Result<()> {
     // Create action channel for async data loading
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
 
-    // Initial data load
-    spawn_load_counts(client.clone(), action_tx.clone());
-    spawn_load_workflows(
+    // Initial data load - run sequentially to avoid overwhelming the CLI/API
+    spawn_initial_load(
         client.clone(),
         action_tx.clone(),
         app.filter.clone(),
@@ -499,6 +498,52 @@ fn handle_effects(
             }
         }
     }
+}
+
+/// Load counts and workflows sequentially to avoid overwhelming the CLI/API
+fn spawn_initial_load(
+    client: Arc<dyn TemporalClient>,
+    tx: mpsc::UnboundedSender<Action>,
+    filter: WorkflowFilter,
+    limit: u32,
+) {
+    tokio::spawn(async move {
+        // Load counts first (sequentially for each status)
+        debug!("Loading workflow counts");
+        let mut counts = StatusCounts::new();
+
+        for status in WorkflowStatus::all() {
+            let query = format!("ExecutionStatus='{}'", status.as_query_value());
+            match client.count(Some(&query)).await {
+                Ok(n) => counts.set(*status, n),
+                Err(e) => {
+                    error!("Failed to load count for {:?}: {}", status, e);
+                    let _ = tx.send(Action::Error(e.to_string()));
+                    return;
+                }
+            }
+        }
+
+        debug!("Loaded counts: total={}", counts.total());
+        let _ = tx.send(Action::DataLoaded(DataPayload::Counts(counts)));
+
+        // Then load workflows
+        debug!(
+            "Loading workflows: filter={:?}, limit={}",
+            filter.description(),
+            limit
+        );
+        match client.list(&filter, limit).await {
+            Ok(workflows) => {
+                debug!("Loaded {} workflows", workflows.len());
+                let _ = tx.send(Action::DataLoaded(DataPayload::Workflows(workflows)));
+            }
+            Err(e) => {
+                error!("Failed to load workflows: {}", e);
+                let _ = tx.send(Action::Error(e.to_string()));
+            }
+        }
+    });
 }
 
 fn spawn_load_counts(client: Arc<dyn TemporalClient>, tx: mpsc::UnboundedSender<Action>) {

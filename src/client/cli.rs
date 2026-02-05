@@ -53,6 +53,8 @@ impl CliTemporalClient {
         let mut args = self.base_args();
         args.extend(subcommand.iter().map(|s| s.to_string()));
 
+        tracing::debug!("Running temporal command: temporal {}", args.join(" "));
+
         let output = Command::new("temporal")
             .args(&args)
             .stdout(Stdio::piped())
