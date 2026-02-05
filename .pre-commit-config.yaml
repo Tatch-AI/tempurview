@@ -13,19 +13,13 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy
-        description: Run clippy lints on Rust code
+        description: Run clippy lints on Rust code (also catches compile errors)
         entry: cargo clippy --all-targets --all-features -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
 
-      - id: cargo-check
-        name: cargo check
-        description: Check the package for errors
-        entry: cargo check --all-targets
-        language: system
-        types: [rust]
-        pass_filenames: false
+      # Note: cargo-check is intentionally omitted - clippy already compiles the code
 
       - id: cargo-test
         name: cargo test
