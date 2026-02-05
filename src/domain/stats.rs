@@ -135,7 +135,9 @@ mod tests {
         let non_zero = counts.non_zero();
         assert_eq!(non_zero.len(), 2);
         assert!(non_zero.iter().any(|(s, _)| *s == WorkflowStatus::Running));
-        assert!(non_zero.iter().any(|(s, _)| *s == WorkflowStatus::Completed));
+        assert!(non_zero
+            .iter()
+            .any(|(s, _)| *s == WorkflowStatus::Completed));
     }
 
     #[test]

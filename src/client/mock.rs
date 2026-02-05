@@ -73,7 +73,11 @@ impl MockTemporalClient {
             };
 
             workflows.push(WorkflowSummary {
-                workflow_id: format!("{}-{}", workflow_type.to_lowercase().replace("workflow", ""), i),
+                workflow_id: format!(
+                    "{}-{}",
+                    workflow_type.to_lowercase().replace("workflow", ""),
+                    i
+                ),
                 run_id: format!("run-{}-{}", i, rng.gen::<u32>()),
                 workflow_type,
                 status,
@@ -131,7 +135,11 @@ impl TemporalClient for MockTemporalClient {
                 // Extract status from query
                 for status in WorkflowStatus::all() {
                     if q_upper.contains(&status.as_query_value().to_uppercase()) {
-                        return Ok(self.workflows.iter().filter(|w| w.status == *status).count() as u64);
+                        return Ok(self
+                            .workflows
+                            .iter()
+                            .filter(|w| w.status == *status)
+                            .count() as u64);
                     }
                 }
                 0
@@ -145,7 +153,11 @@ impl TemporalClient for MockTemporalClient {
         Ok(count)
     }
 
-    async fn list(&self, filter: &WorkflowFilter, limit: u32) -> ClientResult<Vec<WorkflowSummary>> {
+    async fn list(
+        &self,
+        filter: &WorkflowFilter,
+        limit: u32,
+    ) -> ClientResult<Vec<WorkflowSummary>> {
         self.simulate_latency().await;
         self.check_failure()?;
 
@@ -187,7 +199,11 @@ impl TemporalClient for MockTemporalClient {
         Ok(filtered)
     }
 
-    async fn describe(&self, workflow_id: &str, _run_id: Option<&str>) -> ClientResult<WorkflowDetail> {
+    async fn describe(
+        &self,
+        workflow_id: &str,
+        _run_id: Option<&str>,
+    ) -> ClientResult<WorkflowDetail> {
         self.simulate_latency().await;
         self.check_failure()?;
 
@@ -226,7 +242,11 @@ impl TemporalClient for MockTemporalClient {
         })
     }
 
-    async fn get_history(&self, workflow_id: &str, _run_id: Option<&str>) -> ClientResult<Vec<HistoryEvent>> {
+    async fn get_history(
+        &self,
+        workflow_id: &str,
+        _run_id: Option<&str>,
+    ) -> ClientResult<Vec<HistoryEvent>> {
         self.simulate_latency().await;
         self.check_failure()?;
 
@@ -272,7 +292,12 @@ impl TemporalClient for MockTemporalClient {
         Ok(())
     }
 
-    async fn terminate(&self, workflow_id: &str, _run_id: Option<&str>, _reason: &str) -> ClientResult<()> {
+    async fn terminate(
+        &self,
+        workflow_id: &str,
+        _run_id: Option<&str>,
+        _reason: &str,
+    ) -> ClientResult<()> {
         self.simulate_latency().await;
         self.check_failure()?;
 
@@ -290,8 +315,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_count() {
-        let client = MockTemporalClient::with_random_data(100)
-            .with_latency(StdDuration::from_millis(0));
+        let client =
+            MockTemporalClient::with_random_data(100).with_latency(StdDuration::from_millis(0));
 
         let count = client.count(None).await.unwrap();
         assert_eq!(count, 100);
@@ -320,13 +345,19 @@ mod tests {
             },
         ];
 
-        let client = MockTemporalClient::with_workflows(workflows)
-            .with_latency(StdDuration::from_millis(0));
+        let client =
+            MockTemporalClient::with_workflows(workflows).with_latency(StdDuration::from_millis(0));
 
-        let running = client.count(Some("ExecutionStatus='Running'")).await.unwrap();
+        let running = client
+            .count(Some("ExecutionStatus='Running'"))
+            .await
+            .unwrap();
         assert_eq!(running, 1);
 
-        let failed = client.count(Some("ExecutionStatus='Failed'")).await.unwrap();
+        let failed = client
+            .count(Some("ExecutionStatus='Failed'"))
+            .await
+            .unwrap();
         assert_eq!(failed, 1);
     }
 
@@ -353,8 +384,8 @@ mod tests {
             },
         ];
 
-        let client = MockTemporalClient::with_workflows(workflows)
-            .with_latency(StdDuration::from_millis(0));
+        let client =
+            MockTemporalClient::with_workflows(workflows).with_latency(StdDuration::from_millis(0));
 
         let filter = WorkflowFilter::new().with_status(WorkflowStatus::Running);
         let result = client.list(&filter, 100).await.unwrap();

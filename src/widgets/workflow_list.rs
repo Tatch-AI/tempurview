@@ -54,7 +54,11 @@ impl StatefulWidget for WorkflowListWidget<'_> {
                     .collect();
 
                 let list = List::new(items)
-                    .block(Block::default().borders(Borders::ALL).title(self.build_title()))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(self.build_title()),
+                    )
                     .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
                     .highlight_symbol("> ");
 

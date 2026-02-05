@@ -59,7 +59,9 @@ impl CliTemporalClient {
             .stderr(Stdio::piped())
             .output()
             .await
-            .map_err(|e| ClientError::CommandFailed(format!("Failed to execute temporal CLI: {}", e)))?;
+            .map_err(|e| {
+                ClientError::CommandFailed(format!("Failed to execute temporal CLI: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -81,9 +83,15 @@ impl TemporalClient for CliTemporalClient {
         parse_count_output(&output)
     }
 
-    async fn list(&self, filter: &WorkflowFilter, limit: u32) -> ClientResult<Vec<WorkflowSummary>> {
+    async fn list(
+        &self,
+        filter: &WorkflowFilter,
+        limit: u32,
+    ) -> ClientResult<Vec<WorkflowSummary>> {
         let limit_str = limit.to_string();
-        let mut args = vec!["workflow", "list", "--output", "json", "--limit", &limit_str];
+        let mut args = vec![
+            "workflow", "list", "--output", "json", "--limit", &limit_str,
+        ];
         let query = filter.to_query();
 
         if let Some(ref q) = query {
@@ -94,8 +102,19 @@ impl TemporalClient for CliTemporalClient {
         parse_workflow_list(&output)
     }
 
-    async fn describe(&self, workflow_id: &str, run_id: Option<&str>) -> ClientResult<WorkflowDetail> {
-        let mut args = vec!["workflow", "describe", "--workflow-id", workflow_id, "--output", "json"];
+    async fn describe(
+        &self,
+        workflow_id: &str,
+        run_id: Option<&str>,
+    ) -> ClientResult<WorkflowDetail> {
+        let mut args = vec![
+            "workflow",
+            "describe",
+            "--workflow-id",
+            workflow_id,
+            "--output",
+            "json",
+        ];
         if let Some(rid) = run_id {
             args.extend(["--run-id", rid]);
         }
@@ -104,8 +123,19 @@ impl TemporalClient for CliTemporalClient {
         parse_workflow_detail(&output)
     }
 
-    async fn get_history(&self, workflow_id: &str, run_id: Option<&str>) -> ClientResult<Vec<HistoryEvent>> {
-        let mut args = vec!["workflow", "show", "--workflow-id", workflow_id, "--output", "json"];
+    async fn get_history(
+        &self,
+        workflow_id: &str,
+        run_id: Option<&str>,
+    ) -> ClientResult<Vec<HistoryEvent>> {
+        let mut args = vec![
+            "workflow",
+            "show",
+            "--workflow-id",
+            workflow_id,
+            "--output",
+            "json",
+        ];
         if let Some(rid) = run_id {
             args.extend(["--run-id", rid]);
         }
@@ -124,8 +154,20 @@ impl TemporalClient for CliTemporalClient {
         Ok(())
     }
 
-    async fn terminate(&self, workflow_id: &str, run_id: Option<&str>, reason: &str) -> ClientResult<()> {
-        let mut args = vec!["workflow", "terminate", "--workflow-id", workflow_id, "--reason", reason];
+    async fn terminate(
+        &self,
+        workflow_id: &str,
+        run_id: Option<&str>,
+        reason: &str,
+    ) -> ClientResult<()> {
+        let mut args = vec![
+            "workflow",
+            "terminate",
+            "--workflow-id",
+            workflow_id,
+            "--reason",
+            reason,
+        ];
         if let Some(rid) = run_id {
             args.extend(["--run-id", rid]);
         }
@@ -149,7 +191,10 @@ pub fn parse_count_output(output: &str) -> ClientResult<u64> {
         let line_lower = line.to_lowercase();
         if line_lower.contains("count") || line_lower.contains("total") {
             for word in line.split_whitespace() {
-                if let Ok(n) = word.trim_matches(|c: char| !c.is_ascii_digit()).parse::<u64>() {
+                if let Ok(n) = word
+                    .trim_matches(|c: char| !c.is_ascii_digit())
+                    .parse::<u64>()
+                {
                     return Ok(n);
                 }
             }
@@ -179,7 +224,9 @@ pub fn parse_workflow_list(json: &str) -> ClientResult<Vec<WorkflowSummary>> {
     } else if let Some(arr) = value.get("executions").and_then(|v| v.as_array()) {
         arr
     } else {
-        return Err(ClientError::ParseError("Expected array or object with executions field".into()));
+        return Err(ClientError::ParseError(
+            "Expected array or object with executions field".into(),
+        ));
     };
 
     let mut workflows = Vec::with_capacity(executions.len());
@@ -221,8 +268,7 @@ fn parse_workflow_execution(exec: &serde_json::Value) -> ClientResult<WorkflowSu
         .and_then(|v| v.as_str())
         .unwrap_or("RUNNING");
 
-    let status = WorkflowStatus::from_str(status_str)
-        .unwrap_or(WorkflowStatus::Running);
+    let status = status_str.parse().unwrap_or(WorkflowStatus::Running);
 
     let start_time = exec
         .get("startTime")
@@ -262,17 +308,16 @@ fn parse_workflow_detail(json: &str) -> ClientResult<WorkflowDetail> {
 
     let input = value
         .get("input")
-        .or_else(|| value.get("workflowExecutionInfo").and_then(|v| v.get("input")))
+        .or_else(|| {
+            value
+                .get("workflowExecutionInfo")
+                .and_then(|v| v.get("input"))
+        })
         .cloned();
 
-    let output = value
-        .get("output")
-        .or_else(|| value.get("result"))
-        .cloned();
+    let output = value.get("output").or_else(|| value.get("result")).cloned();
 
-    let failure = value
-        .get("failure")
-        .and_then(parse_failure_info);
+    let failure = value.get("failure").and_then(parse_failure_info);
 
     let history_length = value
         .get("historyLength")
@@ -282,21 +327,13 @@ fn parse_workflow_detail(json: &str) -> ClientResult<WorkflowDetail> {
     let memo = value
         .get("memo")
         .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        })
+        .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
 
     let search_attributes = value
         .get("searchAttributes")
         .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        })
+        .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
 
     Ok(WorkflowDetail {
@@ -351,10 +388,7 @@ fn parse_history_events(json: &str) -> ClientResult<Vec<HistoryEvent>> {
     let mut result = Vec::with_capacity(events.len());
 
     for event in events {
-        let event_id = event
-            .get("eventId")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        let event_id = event.get("eventId").and_then(|v| v.as_i64()).unwrap_or(0);
 
         let event_type = event
             .get("eventType")

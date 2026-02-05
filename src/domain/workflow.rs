@@ -15,21 +15,36 @@ pub enum WorkflowStatus {
     ContinuedAsNew,
 }
 
-impl WorkflowStatus {
-    /// Parse from Temporal CLI output string
-    pub fn from_str(s: &str) -> Option<Self> {
+/// Error returned when parsing an invalid workflow status string
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseWorkflowStatusError(String);
+
+impl std::fmt::Display for ParseWorkflowStatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid workflow status: {}", self.0)
+    }
+}
+
+impl std::error::Error for ParseWorkflowStatusError {}
+
+impl std::str::FromStr for WorkflowStatus {
+    type Err = ParseWorkflowStatusError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
-            "RUNNING" => Some(Self::Running),
-            "COMPLETED" => Some(Self::Completed),
-            "FAILED" => Some(Self::Failed),
-            "CANCELED" => Some(Self::Canceled),
-            "TERMINATED" => Some(Self::Terminated),
-            "TIMED_OUT" | "TIMEDOUT" => Some(Self::TimedOut),
-            "CONTINUED_AS_NEW" | "CONTINUEDASNEW" => Some(Self::ContinuedAsNew),
-            _ => None,
+            "RUNNING" => Ok(Self::Running),
+            "COMPLETED" => Ok(Self::Completed),
+            "FAILED" => Ok(Self::Failed),
+            "CANCELED" => Ok(Self::Canceled),
+            "TERMINATED" => Ok(Self::Terminated),
+            "TIMED_OUT" | "TIMEDOUT" => Ok(Self::TimedOut),
+            "CONTINUED_AS_NEW" | "CONTINUEDASNEW" => Ok(Self::ContinuedAsNew),
+            _ => Err(ParseWorkflowStatusError(s.to_string())),
         }
     }
+}
 
+impl WorkflowStatus {
     /// Convert to query string format
     pub fn as_query_value(&self) -> &'static str {
         match self {
@@ -138,30 +153,30 @@ mod tests {
     #[test]
     fn test_status_from_str() {
         assert_eq!(
-            WorkflowStatus::from_str("RUNNING"),
-            Some(WorkflowStatus::Running)
+            "RUNNING".parse::<WorkflowStatus>(),
+            Ok(WorkflowStatus::Running)
         );
         assert_eq!(
-            WorkflowStatus::from_str("running"),
-            Some(WorkflowStatus::Running)
+            "running".parse::<WorkflowStatus>(),
+            Ok(WorkflowStatus::Running)
         );
         assert_eq!(
-            WorkflowStatus::from_str("COMPLETED"),
-            Some(WorkflowStatus::Completed)
+            "COMPLETED".parse::<WorkflowStatus>(),
+            Ok(WorkflowStatus::Completed)
         );
         assert_eq!(
-            WorkflowStatus::from_str("FAILED"),
-            Some(WorkflowStatus::Failed)
+            "FAILED".parse::<WorkflowStatus>(),
+            Ok(WorkflowStatus::Failed)
         );
         assert_eq!(
-            WorkflowStatus::from_str("TIMED_OUT"),
-            Some(WorkflowStatus::TimedOut)
+            "TIMED_OUT".parse::<WorkflowStatus>(),
+            Ok(WorkflowStatus::TimedOut)
         );
         assert_eq!(
-            WorkflowStatus::from_str("CONTINUED_AS_NEW"),
-            Some(WorkflowStatus::ContinuedAsNew)
+            "CONTINUED_AS_NEW".parse::<WorkflowStatus>(),
+            Ok(WorkflowStatus::ContinuedAsNew)
         );
-        assert_eq!(WorkflowStatus::from_str("INVALID"), None);
+        assert!("INVALID".parse::<WorkflowStatus>().is_err());
     }
 
     #[test]

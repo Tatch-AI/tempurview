@@ -19,7 +19,11 @@ fn test_client_creation_from_env() {
     dotenvy::dotenv().ok();
 
     let result = CliTemporalClient::from_env();
-    assert!(result.is_ok(), "Failed to create client: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to create client: {:?}",
+        result.err()
+    );
 }
 
 /// Test basic connection by counting workflows
@@ -28,8 +32,8 @@ fn test_client_creation_from_env() {
 async fn test_connection_count() {
     dotenvy::dotenv().ok();
 
-    let client = CliTemporalClient::from_env()
-        .expect("TEMPORAL_* environment variables must be set");
+    let client =
+        CliTemporalClient::from_env().expect("TEMPORAL_* environment variables must be set");
 
     let result = client.count(None).await;
 
@@ -47,11 +51,14 @@ async fn test_connection_count() {
 async fn test_connection_count_by_status() {
     dotenvy::dotenv().ok();
 
-    let client = CliTemporalClient::from_env()
-        .expect("TEMPORAL_* environment variables must be set");
+    let client =
+        CliTemporalClient::from_env().expect("TEMPORAL_* environment variables must be set");
 
     // Test counting running workflows
-    let query = format!("ExecutionStatus='{}'", WorkflowStatus::Running.as_query_value());
+    let query = format!(
+        "ExecutionStatus='{}'",
+        WorkflowStatus::Running.as_query_value()
+    );
     let result = client.count(Some(&query)).await;
 
     assert!(result.is_ok(), "Count by status failed: {:?}", result.err());
@@ -64,8 +71,8 @@ async fn test_connection_count_by_status() {
 async fn test_connection_list() {
     dotenvy::dotenv().ok();
 
-    let client = CliTemporalClient::from_env()
-        .expect("TEMPORAL_* environment variables must be set");
+    let client =
+        CliTemporalClient::from_env().expect("TEMPORAL_* environment variables must be set");
 
     let filter = WorkflowFilter::new();
     let result = client.list(&filter, 10).await;
@@ -89,15 +96,19 @@ async fn test_connection_list() {
 async fn test_connection_list_with_filter() {
     dotenvy::dotenv().ok();
 
-    let client = CliTemporalClient::from_env()
-        .expect("TEMPORAL_* environment variables must be set");
+    let client =
+        CliTemporalClient::from_env().expect("TEMPORAL_* environment variables must be set");
 
     // Filter for completed workflows
     let filter = WorkflowFilter::new();
     // Note: The filter.status field is used internally
 
     let result = client.list(&filter, 5).await;
-    assert!(result.is_ok(), "List with filter failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "List with filter failed: {:?}",
+        result.err()
+    );
 }
 
 /// Full connection test that verifies all basic operations

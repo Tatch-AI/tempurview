@@ -34,13 +34,18 @@ impl Widget for StatusDashboard<'_> {
             LoadState::Loading => {
                 let loading = Paragraph::new("Loading...")
                     .style(Style::default().fg(Color::DarkGray))
-                    .block(Block::default().borders(Borders::ALL).title("Status Dashboard"));
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Status Dashboard"),
+                    );
                 loading.render(area, buf);
             }
             LoadState::Loaded(counts) => {
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!("Status Dashboard (Total: {})", format_count(counts.total())));
+                let block = Block::default().borders(Borders::ALL).title(format!(
+                    "Status Dashboard (Total: {})",
+                    format_count(counts.total())
+                ));
 
                 let inner = block.inner(area);
                 block.render(area, buf);
@@ -48,8 +53,12 @@ impl Widget for StatusDashboard<'_> {
                 // Create layout for status boxes
                 let statuses = WorkflowStatus::all();
                 let chunks = Layout::horizontal(
-                    statuses.iter().map(|_| Constraint::Ratio(1, statuses.len() as u32)).collect::<Vec<_>>()
-                ).split(inner);
+                    statuses
+                        .iter()
+                        .map(|_| Constraint::Ratio(1, statuses.len() as u32))
+                        .collect::<Vec<_>>(),
+                )
+                .split(inner);
 
                 for (i, status) in statuses.iter().enumerate() {
                     let count = counts.get(*status);
@@ -61,20 +70,34 @@ impl Widget for StatusDashboard<'_> {
             LoadState::Error(e) => {
                 let error = Paragraph::new(format!("Error: {}", e))
                     .style(Style::default().fg(Color::Red))
-                    .block(Block::default().borders(Borders::ALL).title("Status Dashboard"));
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Status Dashboard"),
+                    );
                 error.render(area, buf);
             }
             LoadState::NotLoaded => {
                 let empty = Paragraph::new("Press 'r' to refresh")
                     .style(Style::default().fg(Color::DarkGray))
-                    .block(Block::default().borders(Borders::ALL).title("Status Dashboard"));
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Status Dashboard"),
+                    );
                 empty.render(area, buf);
             }
         }
     }
 }
 
-fn render_status_box(status: WorkflowStatus, count: u64, is_selected: bool, area: Rect, buf: &mut Buffer) {
+fn render_status_box(
+    status: WorkflowStatus,
+    count: u64,
+    is_selected: bool,
+    area: Rect,
+    buf: &mut Buffer,
+) {
     let mut style = Style::default().fg(status.color());
 
     if is_selected {
@@ -93,7 +116,9 @@ fn render_status_box(status: WorkflowStatus, count: u64, is_selected: bool, area
         let count_str = format_count(count);
         let count_line = Line::from(Span::styled(
             count_str,
-            Style::default().fg(status.color()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(status.color())
+                .add_modifier(Modifier::BOLD),
         ));
 
         let paragraph = Paragraph::new(count_line);

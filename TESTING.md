@@ -145,22 +145,25 @@ Rust doesn't have built-in parameterized tests, but you can simulate them:
 ```rust
 #[test]
 fn test_status_parsing_all_variants() {
+    // For types implementing FromStr, use .parse()
     let cases = vec![
-        ("RUNNING", Some(WorkflowStatus::Running)),
-        ("COMPLETED", Some(WorkflowStatus::Completed)),
-        ("FAILED", Some(WorkflowStatus::Failed)),
-        ("invalid", None),
-        ("", None),
+        ("RUNNING", Ok(WorkflowStatus::Running)),
+        ("COMPLETED", Ok(WorkflowStatus::Completed)),
+        ("FAILED", Ok(WorkflowStatus::Failed)),
     ];
 
     for (input, expected) in cases {
         assert_eq!(
-            WorkflowStatus::from_str(input),
+            input.parse::<WorkflowStatus>(),
             expected,
             "Failed for input: {}",
             input
         );
     }
+
+    // Test error cases separately
+    assert!("invalid".parse::<WorkflowStatus>().is_err());
+    assert!("".parse::<WorkflowStatus>().is_err());
 }
 ```
 

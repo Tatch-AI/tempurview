@@ -15,10 +15,7 @@ pub struct HelpBar {
 impl HelpBar {
     pub fn for_view(view: View, input_mode: InputMode) -> Self {
         let shortcuts = match (view, input_mode) {
-            (_, InputMode::FilterInput) => vec![
-                ("Enter", "Apply"),
-                ("Esc", "Cancel"),
-            ],
+            (_, InputMode::FilterInput) => vec![("Enter", "Apply"), ("Esc", "Cancel")],
             (View::Dashboard, _) => vec![
                 ("j/k", "Navigate"),
                 ("1-5", "Filter status"),
@@ -65,10 +62,7 @@ impl Widget for HelpBar {
                             .bg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        format!(" {} ", action),
-                        Style::default().fg(Color::White),
-                    ),
+                    Span::styled(format!(" {} ", action), Style::default().fg(Color::White)),
                 ]
             })
             .collect();

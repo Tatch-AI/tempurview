@@ -1,6 +1,8 @@
 use crate::action::Action;
 use crate::app::{InputMode, View};
-use crossterm::event::{Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+};
 use futures::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -106,11 +108,21 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 },
                 KeyCode::Esc => Some(Action::GoBack),
                 // Status filter shortcuts (number keys)
-                KeyCode::Char('1') => Some(Action::SetStatusFilter(Some(crate::domain::WorkflowStatus::Running))),
-                KeyCode::Char('2') => Some(Action::SetStatusFilter(Some(crate::domain::WorkflowStatus::Completed))),
-                KeyCode::Char('3') => Some(Action::SetStatusFilter(Some(crate::domain::WorkflowStatus::Failed))),
-                KeyCode::Char('4') => Some(Action::SetStatusFilter(Some(crate::domain::WorkflowStatus::Canceled))),
-                KeyCode::Char('5') => Some(Action::SetStatusFilter(Some(crate::domain::WorkflowStatus::Terminated))),
+                KeyCode::Char('1') => Some(Action::SetStatusFilter(Some(
+                    crate::domain::WorkflowStatus::Running,
+                ))),
+                KeyCode::Char('2') => Some(Action::SetStatusFilter(Some(
+                    crate::domain::WorkflowStatus::Completed,
+                ))),
+                KeyCode::Char('3') => Some(Action::SetStatusFilter(Some(
+                    crate::domain::WorkflowStatus::Failed,
+                ))),
+                KeyCode::Char('4') => Some(Action::SetStatusFilter(Some(
+                    crate::domain::WorkflowStatus::Canceled,
+                ))),
+                KeyCode::Char('5') => Some(Action::SetStatusFilter(Some(
+                    crate::domain::WorkflowStatus::Terminated,
+                ))),
                 KeyCode::Char('0') => Some(Action::ClearFilters),
                 // View-specific shortcuts
                 KeyCode::Char('c') if view == View::WorkflowDetail => {
@@ -206,14 +218,18 @@ mod tests {
         let action = key_to_action(key, View::Dashboard, InputMode::Normal);
         assert_eq!(
             action,
-            Some(Action::SetStatusFilter(Some(crate::domain::WorkflowStatus::Running)))
+            Some(Action::SetStatusFilter(Some(
+                crate::domain::WorkflowStatus::Running
+            )))
         );
 
         let key = make_key(KeyCode::Char('3'));
         let action = key_to_action(key, View::Dashboard, InputMode::Normal);
         assert_eq!(
             action,
-            Some(Action::SetStatusFilter(Some(crate::domain::WorkflowStatus::Failed)))
+            Some(Action::SetStatusFilter(Some(
+                crate::domain::WorkflowStatus::Failed
+            )))
         );
 
         let key = make_key(KeyCode::Char('0'));

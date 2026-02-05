@@ -24,10 +24,10 @@ impl Widget for WorkflowDetailWidget<'_> {
         match self.detail {
             LoadState::Loaded(detail) => {
                 let layout = Layout::vertical([
-                    Constraint::Length(8),  // Metadata
-                    Constraint::Length(8),  // Input
-                    Constraint::Length(8),  // Output
-                    Constraint::Fill(1),    // Failure (if any)
+                    Constraint::Length(8), // Metadata
+                    Constraint::Length(8), // Input
+                    Constraint::Length(8), // Output
+                    Constraint::Fill(1),   // Failure (if any)
                 ])
                 .split(area);
 
@@ -70,19 +70,31 @@ impl Widget for WorkflowDetailWidget<'_> {
             LoadState::Loading => {
                 let loading = Paragraph::new("Loading workflow details...")
                     .style(Style::default().add_modifier(Modifier::DIM))
-                    .block(Block::default().borders(Borders::ALL).title("Workflow Details"));
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Workflow Details"),
+                    );
                 loading.render(area, buf);
             }
             LoadState::Error(e) => {
                 let error = Paragraph::new(format!("Error: {}", e))
                     .style(Style::default().fg(Color::Red))
-                    .block(Block::default().borders(Borders::ALL).title("Workflow Details"));
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Workflow Details"),
+                    );
                 error.render(area, buf);
             }
             LoadState::NotLoaded => {
                 let empty = Paragraph::new("No workflow selected")
                     .style(Style::default().add_modifier(Modifier::DIM))
-                    .block(Block::default().borders(Borders::ALL).title("Workflow Details"));
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Workflow Details"),
+                    );
                 empty.render(area, buf);
             }
         }
@@ -92,12 +104,10 @@ impl Widget for WorkflowDetailWidget<'_> {
 fn render_metadata_section(detail: &WorkflowDetail, area: Rect, buf: &mut Buffer) {
     let metadata = format_metadata(detail);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(
-            "Workflow: {} ({})",
-            detail.summary.workflow_type, detail.summary.status
-        ));
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        "Workflow: {} ({})",
+        detail.summary.workflow_type, detail.summary.status
+    ));
 
     let inner = block.inner(area);
     block.render(area, buf);
@@ -106,7 +116,10 @@ fn render_metadata_section(detail: &WorkflowDetail, area: Rect, buf: &mut Buffer
         .iter()
         .map(|(key, value)| {
             Line::from(vec![
-                Span::styled(format!("{}: ", key), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{}: ", key),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(value.clone()),
             ])
         })
@@ -116,7 +129,12 @@ fn render_metadata_section(detail: &WorkflowDetail, area: Rect, buf: &mut Buffer
     paragraph.render(inner, buf);
 }
 
-fn render_json_section(title: &str, value: &Option<serde_json::Value>, area: Rect, buf: &mut Buffer) {
+fn render_json_section(
+    title: &str,
+    value: &Option<serde_json::Value>,
+    area: Rect,
+    buf: &mut Buffer,
+) {
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     block.render(area, buf);
@@ -135,12 +153,18 @@ fn render_json_section(title: &str, value: &Option<serde_json::Value>, area: Rec
 /// Pure function: format workflow metadata as key-value pairs
 pub fn format_metadata(detail: &WorkflowDetail) -> Vec<(String, String)> {
     vec![
-        ("Workflow ID".to_string(), detail.summary.workflow_id.clone()),
+        (
+            "Workflow ID".to_string(),
+            detail.summary.workflow_id.clone(),
+        ),
         ("Run ID".to_string(), detail.summary.run_id.clone()),
         ("Type".to_string(), detail.summary.workflow_type.clone()),
         ("Status".to_string(), format!("{}", detail.summary.status)),
         ("Task Queue".to_string(), detail.summary.task_queue.clone()),
-        ("Started".to_string(), detail.summary.start_time.to_rfc3339()),
+        (
+            "Started".to_string(),
+            detail.summary.start_time.to_rfc3339(),
+        ),
         (
             "Closed".to_string(),
             detail
@@ -149,7 +173,10 @@ pub fn format_metadata(detail: &WorkflowDetail) -> Vec<(String, String)> {
                 .map(|t| t.to_rfc3339())
                 .unwrap_or_else(|| "(running)".to_string()),
         ),
-        ("History Events".to_string(), detail.history_length.to_string()),
+        (
+            "History Events".to_string(),
+            detail.history_length.to_string(),
+        ),
     ]
 }
 
@@ -185,9 +212,17 @@ mod tests {
         let detail = make_detail();
         let metadata = format_metadata(&detail);
 
-        assert!(metadata.iter().any(|(k, v)| k == "Workflow ID" && v == "wf-123"));
-        assert!(metadata.iter().any(|(k, v)| k == "Run ID" && v == "run-456"));
-        assert!(metadata.iter().any(|(k, v)| k == "Type" && v == "TestWorkflow"));
-        assert!(metadata.iter().any(|(k, v)| k == "Status" && v == "Completed"));
+        assert!(metadata
+            .iter()
+            .any(|(k, v)| k == "Workflow ID" && v == "wf-123"));
+        assert!(metadata
+            .iter()
+            .any(|(k, v)| k == "Run ID" && v == "run-456"));
+        assert!(metadata
+            .iter()
+            .any(|(k, v)| k == "Type" && v == "TestWorkflow"));
+        assert!(metadata
+            .iter()
+            .any(|(k, v)| k == "Status" && v == "Completed"));
     }
 }

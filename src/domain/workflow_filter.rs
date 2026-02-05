@@ -95,7 +95,7 @@ impl WorkflowFilter {
             let rest = &query[start + 17..]; // Skip "ExecutionStatus='"
             if let Some(end) = rest.find('\'') {
                 let status_str = &rest[..end];
-                if let Some(status) = WorkflowStatus::from_str(status_str) {
+                if let Ok(status) = status_str.parse() {
                     filter.status = Some(status);
                 }
             }
@@ -168,7 +168,10 @@ mod tests {
     #[test]
     fn test_type_filter() {
         let filter = WorkflowFilter::new().with_type("TestWorkflow");
-        assert_eq!(filter.to_query(), Some("WorkflowType='TestWorkflow'".into()));
+        assert_eq!(
+            filter.to_query(),
+            Some("WorkflowType='TestWorkflow'".into())
+        );
     }
 
     #[test]

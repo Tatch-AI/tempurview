@@ -313,7 +313,11 @@ impl App {
 
         let list_state = self.current_list_state_mut();
         let current = list_state.selected().unwrap_or(0);
-        let next = if current >= len - 1 { current } else { current + 1 };
+        let next = if current >= len - 1 {
+            current
+        } else {
+            current + 1
+        };
         list_state.select(Some(next));
     }
 

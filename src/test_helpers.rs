@@ -2,9 +2,9 @@
 //!
 //! This module provides utilities for creating test data and common test setups.
 
-use crate::domain::{WorkflowStatus, WorkflowSummary, WorkflowDetail, FailureInfo, StatusCounts};
 use crate::app::{App, LoadState};
-use chrono::{Utc, Duration};
+use crate::domain::{FailureInfo, StatusCounts, WorkflowDetail, WorkflowStatus, WorkflowSummary};
+use chrono::{Duration, Utc};
 use std::collections::HashMap;
 
 /// Create a test workflow summary with the given status

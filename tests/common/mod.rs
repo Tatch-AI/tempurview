@@ -1,7 +1,7 @@
 //! Common test utilities shared across integration tests
 
+use chrono::{Duration, Utc};
 use tempurview::domain::{WorkflowStatus, WorkflowSummary};
-use chrono::{Utc, Duration};
 
 /// Create a test workflow with a specific status
 pub fn make_test_workflow(id: u64, status: WorkflowStatus) -> WorkflowSummary {

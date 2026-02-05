@@ -53,10 +53,9 @@ impl Config {
         config.temporal_api_key = std::env::var("TEMPORAL_API_KEY").ok();
 
         if let Ok(val) = std::env::var("TEMPORAL_TUI_REFRESH_INTERVAL") {
-            config.refresh_interval = Duration::from_secs(
-                val.parse()
-                    .map_err(|_| ConfigError::InvalidValue("TEMPORAL_TUI_REFRESH_INTERVAL".into(), val))?,
-            );
+            config.refresh_interval = Duration::from_secs(val.parse().map_err(|_| {
+                ConfigError::InvalidValue("TEMPORAL_TUI_REFRESH_INTERVAL".into(), val)
+            })?);
         }
 
         if let Ok(val) = std::env::var("TEMPORAL_TUI_DEFAULT_LIMIT") {
@@ -66,10 +65,10 @@ impl Config {
         }
 
         if let Ok(val) = std::env::var("TEMPORAL_TUI_TICK_RATE") {
-            config.tick_rate = Duration::from_millis(
-                val.parse()
-                    .map_err(|_| ConfigError::InvalidValue("TEMPORAL_TUI_TICK_RATE".into(), val))?,
-            );
+            config.tick_rate =
+                Duration::from_millis(val.parse().map_err(|_| {
+                    ConfigError::InvalidValue("TEMPORAL_TUI_TICK_RATE".into(), val)
+                })?);
         }
 
         Ok(config)
@@ -87,9 +86,9 @@ impl Config {
                 "--mock-count" => {
                     i += 1;
                     if i < args.len() {
-                        config.mock_workflow_count = args[i]
-                            .parse()
-                            .map_err(|_| ConfigError::InvalidValue("--mock-count".into(), args[i].clone()))?;
+                        config.mock_workflow_count = args[i].parse().map_err(|_| {
+                            ConfigError::InvalidValue("--mock-count".into(), args[i].clone())
+                        })?;
                     }
                 }
                 "--address" => {
@@ -107,9 +106,9 @@ impl Config {
                 "--limit" => {
                     i += 1;
                     if i < args.len() {
-                        config.default_limit = args[i]
-                            .parse()
-                            .map_err(|_| ConfigError::InvalidValue("--limit".into(), args[i].clone()))?;
+                        config.default_limit = args[i].parse().map_err(|_| {
+                            ConfigError::InvalidValue("--limit".into(), args[i].clone())
+                        })?;
                     }
                 }
                 _ => {}

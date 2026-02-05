@@ -5,8 +5,8 @@
 
 mod common;
 
-use tempurview::app::{App, LoadState, View};
 use tempurview::action::{Action, DataPayload};
+use tempurview::app::{App, LoadState, View};
 use tempurview::client::{MockTemporalClient, TemporalClient};
 use tempurview::domain::{StatusCounts, WorkflowFilter, WorkflowStatus};
 
@@ -108,8 +108,12 @@ fn test_app_refresh_triggers_loading() {
 
     assert!(matches!(app.status_counts, LoadState::Loading));
     assert!(matches!(app.workflows, LoadState::Loading));
-    assert!(effects.iter().any(|e| matches!(e, tempurview::Effect::LoadCounts)));
-    assert!(effects.iter().any(|e| matches!(e, tempurview::Effect::LoadWorkflows)));
+    assert!(effects
+        .iter()
+        .any(|e| matches!(e, tempurview::Effect::LoadCounts)));
+    assert!(effects
+        .iter()
+        .any(|e| matches!(e, tempurview::Effect::LoadWorkflows)));
 }
 
 #[test]
@@ -171,9 +175,7 @@ fn test_app_navigation_with_workflows() {
 #[test]
 fn test_app_view_navigation() {
     let mut app = App::new();
-    app.workflows = LoadState::Loaded(vec![
-        common::make_test_workflow(1, WorkflowStatus::Running),
-    ]);
+    app.workflows = LoadState::Loaded(vec![common::make_test_workflow(1, WorkflowStatus::Running)]);
 
     assert_eq!(app.view, View::Dashboard);
 
@@ -201,7 +203,9 @@ fn test_app_status_filter_triggers_reload() {
     let effects = app.update(Action::SetStatusFilter(Some(WorkflowStatus::Failed)));
 
     assert_eq!(app.filter.status, Some(WorkflowStatus::Failed));
-    assert!(effects.iter().any(|e| matches!(e, tempurview::Effect::LoadWorkflows)));
+    assert!(effects
+        .iter()
+        .any(|e| matches!(e, tempurview::Effect::LoadWorkflows)));
 }
 
 #[test]
@@ -213,7 +217,9 @@ fn test_app_clear_filters() {
     let effects = app.update(Action::ClearFilters);
 
     assert!(app.filter.is_empty());
-    assert!(effects.iter().any(|e| matches!(e, tempurview::Effect::LoadWorkflows)));
+    assert!(effects
+        .iter()
+        .any(|e| matches!(e, tempurview::Effect::LoadWorkflows)));
 }
 
 #[test]
@@ -248,7 +254,7 @@ async fn test_full_refresh_cycle() {
     let mut app = App::new();
 
     // Trigger refresh
-    let effects = app.update(Action::Refresh);
+    let _effects = app.update(Action::Refresh);
     assert!(matches!(app.status_counts, LoadState::Loading));
     assert!(matches!(app.workflows, LoadState::Loading));
 

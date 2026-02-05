@@ -53,11 +53,13 @@ impl Widget for FilterInput<'_> {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(if self.is_active { "Filter (Enter to apply, Esc to cancel)" } else { "Filter" });
+            .title(if self.is_active {
+                "Filter (Enter to apply, Esc to cancel)"
+            } else {
+                "Filter"
+            });
 
-        let paragraph = Paragraph::new(display_text)
-            .style(style)
-            .block(block);
+        let paragraph = Paragraph::new(display_text).style(style).block(block);
 
         paragraph.render(area, buf);
     }

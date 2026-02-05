@@ -36,5 +36,13 @@ rand = "0.8"
 # Environment file loading
 dotenvy = "0.15"
 
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Home directory
+dirs = "5"
+
 [dev-dependencies]
 pretty_assertions = "1"

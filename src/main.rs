@@ -4,8 +4,11 @@ use tempurview::client::{CliTemporalClient, MockTemporalClient, TemporalClient};
 use tempurview::config::Config;
 use tempurview::domain::{StatusCounts, WorkflowFilter, WorkflowStatus};
 use tempurview::event::{event_to_action, EventHandler};
+use tempurview::logging;
 use tempurview::tui::Tui;
-use tempurview::widgets::{FilterInput, HelpBar, HelpOverlay, StatusDashboard, WorkflowDetailWidget, WorkflowListWidget};
+use tempurview::widgets::{
+    FilterInput, HelpBar, HelpOverlay, StatusDashboard, WorkflowDetailWidget, WorkflowListWidget,
+};
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -16,13 +19,19 @@ use ratatui::{
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::{debug, error, info, warn};
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    color_eyre::install()?;
-
     // Load .env file if present (silently ignore if not found)
     let _ = dotenvy::dotenv();
+
+    // Initialize logging FIRST (before color_eyre which may set up its own subscriber)
+    if let Err(e) = logging::init() {
+        eprintln!("Warning: Failed to initialize logging: {}", e);
+    }
+
+    color_eyre::install()?;
 
     // Parse configuration
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,20 +42,41 @@ async fn main() -> color_eyre::Result<()> {
         return Ok(());
     }
 
+    // Check for logs flag
+    if args.iter().any(|a| a == "--logs") {
+        show_logs_info();
+        return Ok(());
+    }
+
     // Check for test-connection flag
     if args.iter().any(|a| a == "--test-connection") {
         return test_connection().await;
     }
 
     let config = Config::from_args(&args)?;
+    info!("Starting Tempurview");
+    debug!(
+        "Config: use_mock={}, limit={}",
+        config.use_mock, config.default_limit
+    );
 
     // Create client
     let client: Arc<dyn TemporalClient> = if config.use_mock {
-        Arc::new(MockTemporalClient::with_random_data(config.mock_workflow_count))
+        info!(
+            "Using mock client with {} workflows",
+            config.mock_workflow_count
+        );
+        Arc::new(MockTemporalClient::with_random_data(
+            config.mock_workflow_count,
+        ))
     } else {
         match CliTemporalClient::from_env() {
-            Ok(c) => Arc::new(c),
+            Ok(c) => {
+                info!("Connected to Temporal");
+                Arc::new(c)
+            }
             Err(e) => {
+                error!("Failed to create Temporal client: {}", e);
                 eprintln!("Error: {}", e);
                 eprintln!("\nMake sure the following environment variables are set:");
                 eprintln!("  TEMPORAL_ADDRESS   - Temporal server address (e.g., localhost:7233)");
@@ -60,6 +90,7 @@ async fn main() -> color_eyre::Result<()> {
 
     // Initialize terminal
     let mut tui = Tui::new()?;
+    info!("TUI initialized");
 
     // Create app state
     let mut app = App::new();
@@ -131,6 +162,7 @@ fn print_help() {
     println!("    --namespace NS      Temporal namespace (overrides TEMPORAL_NAMESPACE)");
     println!("    --limit N           Maximum workflows to fetch (default: 50)");
     println!("    --test-connection   Test connection to Temporal and exit");
+    println!("    --logs              Show log file location and recent errors");
     println!("    -h, --help          Show this help message");
     println!();
     println!("ENVIRONMENT VARIABLES:");
@@ -150,7 +182,113 @@ fn print_help() {
     println!("    q               Quit");
 }
 
+fn show_logs_info() {
+    println!("Tempurview Logs");
+    println!("===============\n");
+
+    match logging::logs_dir() {
+        Some(dir) => {
+            println!("Log directory: {}", dir.display());
+            println!();
+
+            // List log files
+            if dir.exists() {
+                println!("Log files:");
+                match std::fs::read_dir(&dir) {
+                    Ok(entries) => {
+                        let mut files: Vec<_> = entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| {
+                                e.file_name()
+                                    .to_string_lossy()
+                                    .starts_with("tempurview.log")
+                            })
+                            .collect();
+                        files.sort_by_key(|e| {
+                            std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok()))
+                        });
+
+                        if files.is_empty() {
+                            println!("  (no log files yet)");
+                        } else {
+                            for entry in files.iter().take(5) {
+                                let path = entry.path();
+                                let size = entry.metadata().ok().map(|m| m.len()).unwrap_or(0);
+                                println!(
+                                    "  {} ({} bytes)",
+                                    path.file_name().unwrap().to_string_lossy(),
+                                    size
+                                );
+                            }
+                            if files.len() > 5 {
+                                println!("  ... and {} more", files.len() - 5);
+                            }
+                        }
+                    }
+                    Err(e) => println!("  Error reading directory: {}", e),
+                }
+
+                // Show recent errors from the most recent log file
+                println!();
+                println!("Recent errors (last 10):");
+                let log_files: Vec<_> = std::fs::read_dir(&dir)
+                    .ok()
+                    .map(|entries| {
+                        let mut files: Vec<_> = entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| {
+                                e.file_name()
+                                    .to_string_lossy()
+                                    .starts_with("tempurview.log")
+                            })
+                            .collect();
+                        files.sort_by_key(|e| {
+                            std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok()))
+                        });
+                        files
+                    })
+                    .unwrap_or_default();
+
+                if log_files.is_empty() {
+                    println!("  (no log files yet)");
+                } else {
+                    let mut found_errors = false;
+                    for entry in log_files.iter().take(3) {
+                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                            let errors: Vec<&str> = content
+                                .lines()
+                                .filter(|line| line.contains("ERROR"))
+                                .collect();
+                            for line in errors.iter().rev().take(10) {
+                                println!("  {}", line);
+                                found_errors = true;
+                            }
+                        }
+                    }
+                    if !found_errors {
+                        println!("  (no errors)");
+                    }
+                }
+            } else {
+                println!("Log directory does not exist yet.");
+                println!("It will be created when you first run tempurview.");
+            }
+
+            println!();
+            println!("To view logs in real-time:");
+            println!("  tail -f {}/tempurview.log", dir.display());
+            println!();
+            println!("To enable debug logging:");
+            println!("  RUST_LOG=tempurview=debug tempurview");
+        }
+        None => {
+            println!("Could not determine log directory (HOME not set?)");
+        }
+    }
+}
+
 async fn test_connection() -> color_eyre::Result<()> {
+    info!("Running connection test");
     println!("Testing Temporal connection...\n");
 
     // Check environment variables
@@ -225,11 +363,11 @@ fn render(app: &App, frame: &mut Frame) {
 
     // Main layout
     let layout = Layout::vertical([
-        Constraint::Length(1),  // Title
-        Constraint::Length(5),  // Dashboard
-        Constraint::Length(3),  // Filter
-        Constraint::Fill(1),    // Content (list or detail)
-        Constraint::Length(1),  // Help bar
+        Constraint::Length(1), // Title
+        Constraint::Length(5), // Dashboard
+        Constraint::Length(3), // Filter
+        Constraint::Fill(1),   // Content (list or detail)
+        Constraint::Length(1), // Help bar
     ])
     .split(area);
 
@@ -336,9 +474,12 @@ fn handle_effects(
     for effect in effects {
         match effect {
             Effect::LoadCounts => spawn_load_counts(client.clone(), tx.clone()),
-            Effect::LoadWorkflows => {
-                spawn_load_workflows(client.clone(), tx.clone(), app.filter.clone(), default_limit)
-            }
+            Effect::LoadWorkflows => spawn_load_workflows(
+                client.clone(),
+                tx.clone(),
+                app.filter.clone(),
+                default_limit,
+            ),
             Effect::LoadWorkflowDetail(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());
                 spawn_load_detail(client.clone(), tx.clone(), id, run_id);
@@ -357,6 +498,7 @@ fn handle_effects(
 
 fn spawn_load_counts(client: Arc<dyn TemporalClient>, tx: mpsc::UnboundedSender<Action>) {
     tokio::spawn(async move {
+        debug!("Loading workflow counts");
         let mut counts = StatusCounts::new();
 
         for status in WorkflowStatus::all() {
@@ -364,12 +506,14 @@ fn spawn_load_counts(client: Arc<dyn TemporalClient>, tx: mpsc::UnboundedSender<
             match client.count(Some(&query)).await {
                 Ok(n) => counts.set(*status, n),
                 Err(e) => {
+                    error!("Failed to load count for {:?}: {}", status, e);
                     let _ = tx.send(Action::Error(e.to_string()));
                     return;
                 }
             }
         }
 
+        debug!("Loaded counts: total={}", counts.total());
         let _ = tx.send(Action::DataLoaded(DataPayload::Counts(counts)));
     });
 }
@@ -381,11 +525,18 @@ fn spawn_load_workflows(
     limit: u32,
 ) {
     tokio::spawn(async move {
+        debug!(
+            "Loading workflows: filter={:?}, limit={}",
+            filter.description(),
+            limit
+        );
         match client.list(&filter, limit).await {
             Ok(workflows) => {
+                debug!("Loaded {} workflows", workflows.len());
                 let _ = tx.send(Action::DataLoaded(DataPayload::Workflows(workflows)));
             }
             Err(e) => {
+                error!("Failed to load workflows: {}", e);
                 let _ = tx.send(Action::Error(e.to_string()));
             }
         }
@@ -399,11 +550,14 @@ fn spawn_load_detail(
     run_id: Option<String>,
 ) {
     tokio::spawn(async move {
+        debug!("Loading workflow detail: {}", workflow_id);
         match client.describe(&workflow_id, run_id.as_deref()).await {
             Ok(detail) => {
+                debug!("Loaded detail for workflow: {}", workflow_id);
                 let _ = tx.send(Action::DataLoaded(DataPayload::Detail(Box::new(detail))));
             }
             Err(e) => {
+                error!("Failed to load workflow detail for {}: {}", workflow_id, e);
                 let _ = tx.send(Action::Error(e.to_string()));
             }
         }
@@ -417,12 +571,14 @@ fn spawn_cancel_workflow(
     run_id: Option<String>,
 ) {
     tokio::spawn(async move {
+        info!("Cancelling workflow: {}", workflow_id);
         match client.cancel(&workflow_id, run_id.as_deref()).await {
             Ok(()) => {
-                // Refresh after cancel
+                info!("Successfully cancelled workflow: {}", workflow_id);
                 let _ = tx.send(Action::Refresh);
             }
             Err(e) => {
+                error!("Failed to cancel workflow {}: {}", workflow_id, e);
                 let _ = tx.send(Action::Error(e.to_string()));
             }
         }
@@ -436,15 +592,17 @@ fn spawn_terminate_workflow(
     run_id: Option<String>,
 ) {
     tokio::spawn(async move {
+        warn!("Terminating workflow: {}", workflow_id);
         match client
             .terminate(&workflow_id, run_id.as_deref(), "Terminated via TUI")
             .await
         {
             Ok(()) => {
-                // Refresh after terminate
+                info!("Successfully terminated workflow: {}", workflow_id);
                 let _ = tx.send(Action::Refresh);
             }
             Err(e) => {
+                error!("Failed to terminate workflow {}: {}", workflow_id, e);
                 let _ = tx.send(Action::Error(e.to_string()));
             }
         }

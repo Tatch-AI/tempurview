@@ -34,17 +34,31 @@ pub trait TemporalClient: Send + Sync {
     async fn count(&self, query: Option<&str>) -> ClientResult<u64>;
 
     /// List workflows matching a filter
-    async fn list(&self, filter: &WorkflowFilter, limit: u32) -> ClientResult<Vec<WorkflowSummary>>;
+    async fn list(&self, filter: &WorkflowFilter, limit: u32)
+        -> ClientResult<Vec<WorkflowSummary>>;
 
     /// Get detailed information about a workflow
-    async fn describe(&self, workflow_id: &str, run_id: Option<&str>) -> ClientResult<WorkflowDetail>;
+    async fn describe(
+        &self,
+        workflow_id: &str,
+        run_id: Option<&str>,
+    ) -> ClientResult<WorkflowDetail>;
 
     /// Get workflow history events
-    async fn get_history(&self, workflow_id: &str, run_id: Option<&str>) -> ClientResult<Vec<HistoryEvent>>;
+    async fn get_history(
+        &self,
+        workflow_id: &str,
+        run_id: Option<&str>,
+    ) -> ClientResult<Vec<HistoryEvent>>;
 
     /// Cancel a running workflow
     async fn cancel(&self, workflow_id: &str, run_id: Option<&str>) -> ClientResult<()>;
 
     /// Terminate a workflow
-    async fn terminate(&self, workflow_id: &str, run_id: Option<&str>, reason: &str) -> ClientResult<()>;
+    async fn terminate(
+        &self,
+        workflow_id: &str,
+        run_id: Option<&str>,
+        reason: &str,
+    ) -> ClientResult<()>;
 }
