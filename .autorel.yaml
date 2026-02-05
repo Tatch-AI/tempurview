@@ -1,0 +1,12 @@
+# Autorel configuration for tempurview
+# https://github.com/mhweiner/autorel
+
+# Only release from main branch
+branches:
+  - name: 'main'
+
+# Don't publish to npm (this is a Rust project)
+publish: false
+
+# Optional: Run tests before creating a release
+# pre-run: cargo test
