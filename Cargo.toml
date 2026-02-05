@@ -44,5 +44,13 @@ tracing-appender = "0.2"
 # Home directory
 dirs = "5"
 
+# gRPC client
+tonic = { version = "0.12", features = ["tls", "tls-roots"] }
+prost = "0.13"
+prost-types = "0.13"
+
+[build-dependencies]
+tonic-build = "0.12"
+
 [dev-dependencies]
 pretty_assertions = "1"

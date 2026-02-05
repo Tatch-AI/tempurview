@@ -223,10 +223,11 @@ impl App {
                 vec![]
             }
             Action::Refresh => {
+                // Counts are now computed locally from workflows, so only load workflows
                 self.status_counts = LoadState::Loading;
                 self.workflows = LoadState::Loading;
                 self.last_refresh = Some(Instant::now());
-                vec![Effect::LoadCounts, Effect::LoadWorkflows]
+                vec![Effect::LoadWorkflows]
             }
             Action::CancelWorkflow(id) => {
                 let workflow_id = if id.is_empty() {
@@ -272,6 +273,10 @@ impl App {
                         self.status_counts = LoadState::Loaded(counts);
                     }
                     DataPayload::Workflows(wfs) => {
+                        // Compute counts locally from the workflow list (avoids 7 API calls)
+                        let counts = StatusCounts::from_workflows(&wfs);
+                        self.status_counts = LoadState::Loaded(counts);
+
                         self.workflows = LoadState::Loaded(wfs);
                         // Reset selection if it's out of bounds
                         if let LoadState::Loaded(ref workflows) = self.workflows {
@@ -469,7 +474,8 @@ mod tests {
 
         assert!(matches!(app.status_counts, LoadState::Loading));
         assert!(matches!(app.workflows, LoadState::Loading));
-        assert!(effects.contains(&Effect::LoadCounts));
+        // Counts are computed locally from workflows, so only LoadWorkflows is triggered
+        assert!(!effects.contains(&Effect::LoadCounts));
         assert!(effects.contains(&Effect::LoadWorkflows));
     }
 

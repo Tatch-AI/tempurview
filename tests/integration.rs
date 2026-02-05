@@ -108,7 +108,8 @@ fn test_app_refresh_triggers_loading() {
 
     assert!(matches!(app.status_counts, LoadState::Loading));
     assert!(matches!(app.workflows, LoadState::Loading));
-    assert!(effects
+    // Counts are now computed locally from workflows, so LoadCounts is not triggered
+    assert!(!effects
         .iter()
         .any(|e| matches!(e, tempurview::Effect::LoadCounts)));
     assert!(effects

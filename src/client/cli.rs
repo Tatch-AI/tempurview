@@ -57,6 +57,7 @@ impl CliTemporalClient {
 
         let output = Command::new("temporal")
             .args(&args)
+            .stdin(Stdio::null())  // Isolate from terminal raw mode
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()

@@ -1,8 +1,9 @@
-use tempurview::action::{Action, DataPayload};
+use tempurview::action::Action;
 use tempurview::app::{App, Effect, InputMode, View};
-use tempurview::client::{CliTemporalClient, MockTemporalClient, TemporalClient};
+use tempurview::cli_worker::{CliHandle, CliRequest, CliWorker};
+use tempurview::client::{GrpcTemporalClient, MockTemporalClient, TemporalClient};
 use tempurview::config::Config;
-use tempurview::domain::{StatusCounts, WorkflowFilter, WorkflowStatus};
+use tempurview::domain::WorkflowStatus;
 use tempurview::event::{event_to_action, EventHandler};
 use tempurview::logging;
 use tempurview::tui::Tui;
@@ -19,7 +20,7 @@ use ratatui::{
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -32,9 +33,14 @@ async fn main() -> color_eyre::Result<()> {
     }
 
     // Initialize logging FIRST (before color_eyre which may set up its own subscriber)
-    if let Err(e) = logging::init() {
-        eprintln!("Warning: Failed to initialize logging: {}", e);
-    }
+    // Keep the guard alive for the duration of the program to ensure logs are flushed
+    let _log_guard = match logging::init() {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            eprintln!("Warning: Failed to initialize logging: {}", e);
+            None
+        }
+    };
 
     color_eyre::install()?;
 
@@ -65,7 +71,7 @@ async fn main() -> color_eyre::Result<()> {
         config.use_mock, config.default_limit
     );
 
-    // Create client
+    // Create client (gRPC for real connections, mock for testing)
     let client: Arc<dyn TemporalClient> = if config.use_mock {
         info!(
             "Using mock client with {} workflows",
@@ -75,25 +81,46 @@ async fn main() -> color_eyre::Result<()> {
             config.mock_workflow_count,
         ))
     } else {
-        match CliTemporalClient::from_env() {
+        println!("Connecting to Temporal via gRPC...");
+        match GrpcTemporalClient::from_env().await {
             Ok(c) => {
-                info!("Connected to Temporal");
+                info!("Created gRPC Temporal client");
                 Arc::new(c)
             }
             Err(e) => {
-                error!("Failed to create Temporal client: {}", e);
-                eprintln!("Error: {}", e);
+                error!("Failed to create gRPC Temporal client: {}", e);
+                eprintln!("Connection failed: {}", e);
                 eprintln!("\nMake sure the following environment variables are set:");
-                eprintln!("  TEMPORAL_ADDRESS   - Temporal server address (e.g., localhost:7233)");
+                eprintln!("  TEMPORAL_ADDRESS   - Temporal server address (e.g., us-west1.gcp.api.temporal.io:7233)");
                 eprintln!("  TEMPORAL_NAMESPACE - Temporal namespace");
-                eprintln!("  TEMPORAL_API_KEY   - (optional) API key for authentication");
+                eprintln!("  TEMPORAL_API_KEY   - API key for authentication (required for Temporal Cloud)");
                 eprintln!("\nOr use --mock to run with simulated data");
                 return Ok(());
             }
         }
     };
 
-    // Initialize terminal
+    // Verify connection works before entering raw mode
+    if !config.use_mock {
+        match client.count(None).await {
+            Ok(count) => {
+                println!("Connected! ({} workflows)", count);
+                info!("Connection verified: {} workflows", count);
+            }
+            Err(e) => {
+                error!("Connection verification failed: {}", e);
+                eprintln!("Connection verification failed: {}", e);
+                eprintln!("\nTroubleshooting tips:");
+                eprintln!("  1. Verify your TEMPORAL_ADDRESS is correct");
+                eprintln!("  2. Verify your TEMPORAL_NAMESPACE matches your Temporal namespace");
+                eprintln!("  3. For Temporal Cloud, ensure TEMPORAL_API_KEY is valid");
+                eprintln!("  4. Try running: tempurview --test-connection");
+                return Ok(());
+            }
+        }
+    }
+
+    // NOW enter raw mode - after connection is verified
     let mut tui = Tui::new()?;
     info!("TUI initialized");
 
@@ -106,13 +133,14 @@ async fn main() -> color_eyre::Result<()> {
     // Create action channel for async data loading
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
 
-    // Initial data load - run sequentially to avoid overwhelming the CLI/API
-    spawn_initial_load(
-        client.clone(),
-        action_tx.clone(),
-        app.filter.clone(),
-        config.default_limit,
-    );
+    // Create CLI worker for serialized request execution
+    let (request_tx, request_rx) = mpsc::unbounded_channel::<CliRequest>();
+    let cli_worker = CliWorker::new(client.clone(), request_rx, action_tx.clone());
+    let _worker_handle = cli_worker.spawn();
+    let cli_handle = CliHandle::new(request_tx);
+
+    // Initial data load - just workflows (lazy loading: counts loaded on first refresh 'r')
+    cli_handle.load_workflows(app.filter.clone(), config.default_limit);
 
     // Main loop
     loop {
@@ -124,24 +152,12 @@ async fn main() -> color_eyre::Result<()> {
             Some(event) = events.next() => {
                 if let Some(action) = event_to_action(event, app.view, app.input_mode) {
                     let effects = app.update(action);
-                    handle_effects(
-                        effects,
-                        client.clone(),
-                        action_tx.clone(),
-                        &app,
-                        config.default_limit,
-                    );
+                    handle_effects(effects, &cli_handle, &app, config.default_limit);
                 }
             }
             Some(action) = action_rx.recv() => {
                 let effects = app.update(action);
-                handle_effects(
-                    effects,
-                    client.clone(),
-                    action_tx.clone(),
-                    &app,
-                    config.default_limit,
-                );
+                handle_effects(effects, &cli_handle, &app, config.default_limit);
             }
         }
 
@@ -315,19 +331,19 @@ async fn test_connection() -> color_eyre::Result<()> {
     }
     println!();
 
-    // Try to create client
-    let client = match CliTemporalClient::from_env() {
+    // Try to create gRPC client
+    println!("Attempting to connect via gRPC...");
+    let client = match GrpcTemporalClient::from_env().await {
         Ok(c) => c,
         Err(e) => {
-            println!("✗ Failed to create client: {}", e);
+            println!("✗ Failed to connect: {}", e);
             println!("\nMake sure TEMPORAL_ADDRESS and TEMPORAL_NAMESPACE are set.");
             println!("For Temporal Cloud, you also need TEMPORAL_API_KEY.");
             std::process::exit(1);
         }
     };
 
-    // Try to count workflows (simplest operation)
-    println!("Attempting to connect...");
+    // Try to count workflows
     match client.count(None).await {
         Ok(count) => {
             println!("\n✓ Connection successful!");
@@ -343,18 +359,16 @@ async fn test_connection() -> color_eyre::Result<()> {
                     Err(_) => println!("  {:15} (query failed)", format!("{:?}:", status)),
                 }
             }
-            println!("\n✓ All tests passed! Your connection is working.");
+            println!("\n✓ All tests passed! Your gRPC connection is working.");
         }
         Err(e) => {
             println!("\n✗ Connection failed: {}", e);
             println!("\nTroubleshooting tips:");
             println!("  1. Verify your TEMPORAL_ADDRESS is correct");
-            println!("     - For Temporal Cloud: <namespace>.<accountId>.tmprl.cloud:7233");
+            println!("     - For Temporal Cloud: <region>.<cloud>.api.temporal.io:7233");
             println!("     - For self-hosted: localhost:7233 (or your server address)");
             println!("  2. Verify your TEMPORAL_NAMESPACE matches your Temporal namespace");
             println!("  3. For Temporal Cloud, ensure TEMPORAL_API_KEY is valid");
-            println!("  4. Check that the 'temporal' CLI is installed and in your PATH");
-            println!("  5. Try running: temporal workflow list --address $TEMPORAL_ADDRESS --namespace $TEMPORAL_NAMESPACE");
             std::process::exit(1);
         }
     }
@@ -468,193 +482,27 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     frame.render_widget(HelpOverlay, help_area);
 }
 
-fn handle_effects(
-    effects: Vec<Effect>,
-    client: Arc<dyn TemporalClient>,
-    tx: mpsc::UnboundedSender<Action>,
-    app: &App,
-    default_limit: u32,
-) {
+fn handle_effects(effects: Vec<Effect>, cli_handle: &CliHandle, app: &App, default_limit: u32) {
     for effect in effects {
         match effect {
-            Effect::LoadCounts => spawn_load_counts(client.clone(), tx.clone()),
-            Effect::LoadWorkflows => spawn_load_workflows(
-                client.clone(),
-                tx.clone(),
-                app.filter.clone(),
-                default_limit,
-            ),
+            Effect::LoadCounts => {
+                cli_handle.load_counts();
+            }
+            Effect::LoadWorkflows => {
+                cli_handle.load_workflows(app.filter.clone(), default_limit);
+            }
             Effect::LoadWorkflowDetail(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());
-                spawn_load_detail(client.clone(), tx.clone(), id, run_id);
+                cli_handle.load_detail(id, run_id);
             }
             Effect::CancelWorkflow(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());
-                spawn_cancel_workflow(client.clone(), tx.clone(), id, run_id);
+                cli_handle.cancel_workflow(id, run_id);
             }
             Effect::TerminateWorkflow(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());
-                spawn_terminate_workflow(client.clone(), tx.clone(), id, run_id);
+                cli_handle.terminate_workflow(id, run_id, "Terminated via TUI".to_string());
             }
         }
     }
-}
-
-/// Load counts and workflows sequentially to avoid overwhelming the CLI/API
-fn spawn_initial_load(
-    client: Arc<dyn TemporalClient>,
-    tx: mpsc::UnboundedSender<Action>,
-    filter: WorkflowFilter,
-    limit: u32,
-) {
-    tokio::spawn(async move {
-        // Load counts first (sequentially for each status)
-        debug!("Loading workflow counts");
-        let mut counts = StatusCounts::new();
-
-        for status in WorkflowStatus::all() {
-            let query = format!("ExecutionStatus='{}'", status.as_query_value());
-            match client.count(Some(&query)).await {
-                Ok(n) => counts.set(*status, n),
-                Err(e) => {
-                    error!("Failed to load count for {:?}: {}", status, e);
-                    let _ = tx.send(Action::Error(e.to_string()));
-                    return;
-                }
-            }
-        }
-
-        debug!("Loaded counts: total={}", counts.total());
-        let _ = tx.send(Action::DataLoaded(DataPayload::Counts(counts)));
-
-        // Then load workflows
-        debug!(
-            "Loading workflows: filter={:?}, limit={}",
-            filter.description(),
-            limit
-        );
-        match client.list(&filter, limit).await {
-            Ok(workflows) => {
-                debug!("Loaded {} workflows", workflows.len());
-                let _ = tx.send(Action::DataLoaded(DataPayload::Workflows(workflows)));
-            }
-            Err(e) => {
-                error!("Failed to load workflows: {}", e);
-                let _ = tx.send(Action::Error(e.to_string()));
-            }
-        }
-    });
-}
-
-fn spawn_load_counts(client: Arc<dyn TemporalClient>, tx: mpsc::UnboundedSender<Action>) {
-    tokio::spawn(async move {
-        debug!("Loading workflow counts");
-        let mut counts = StatusCounts::new();
-
-        for status in WorkflowStatus::all() {
-            let query = format!("ExecutionStatus='{}'", status.as_query_value());
-            match client.count(Some(&query)).await {
-                Ok(n) => counts.set(*status, n),
-                Err(e) => {
-                    error!("Failed to load count for {:?}: {}", status, e);
-                    let _ = tx.send(Action::Error(e.to_string()));
-                    return;
-                }
-            }
-        }
-
-        debug!("Loaded counts: total={}", counts.total());
-        let _ = tx.send(Action::DataLoaded(DataPayload::Counts(counts)));
-    });
-}
-
-fn spawn_load_workflows(
-    client: Arc<dyn TemporalClient>,
-    tx: mpsc::UnboundedSender<Action>,
-    filter: WorkflowFilter,
-    limit: u32,
-) {
-    tokio::spawn(async move {
-        debug!(
-            "Loading workflows: filter={:?}, limit={}",
-            filter.description(),
-            limit
-        );
-        match client.list(&filter, limit).await {
-            Ok(workflows) => {
-                debug!("Loaded {} workflows", workflows.len());
-                let _ = tx.send(Action::DataLoaded(DataPayload::Workflows(workflows)));
-            }
-            Err(e) => {
-                error!("Failed to load workflows: {}", e);
-                let _ = tx.send(Action::Error(e.to_string()));
-            }
-        }
-    });
-}
-
-fn spawn_load_detail(
-    client: Arc<dyn TemporalClient>,
-    tx: mpsc::UnboundedSender<Action>,
-    workflow_id: String,
-    run_id: Option<String>,
-) {
-    tokio::spawn(async move {
-        debug!("Loading workflow detail: {}", workflow_id);
-        match client.describe(&workflow_id, run_id.as_deref()).await {
-            Ok(detail) => {
-                debug!("Loaded detail for workflow: {}", workflow_id);
-                let _ = tx.send(Action::DataLoaded(DataPayload::Detail(Box::new(detail))));
-            }
-            Err(e) => {
-                error!("Failed to load workflow detail for {}: {}", workflow_id, e);
-                let _ = tx.send(Action::Error(e.to_string()));
-            }
-        }
-    });
-}
-
-fn spawn_cancel_workflow(
-    client: Arc<dyn TemporalClient>,
-    tx: mpsc::UnboundedSender<Action>,
-    workflow_id: String,
-    run_id: Option<String>,
-) {
-    tokio::spawn(async move {
-        info!("Cancelling workflow: {}", workflow_id);
-        match client.cancel(&workflow_id, run_id.as_deref()).await {
-            Ok(()) => {
-                info!("Successfully cancelled workflow: {}", workflow_id);
-                let _ = tx.send(Action::Refresh);
-            }
-            Err(e) => {
-                error!("Failed to cancel workflow {}: {}", workflow_id, e);
-                let _ = tx.send(Action::Error(e.to_string()));
-            }
-        }
-    });
-}
-
-fn spawn_terminate_workflow(
-    client: Arc<dyn TemporalClient>,
-    tx: mpsc::UnboundedSender<Action>,
-    workflow_id: String,
-    run_id: Option<String>,
-) {
-    tokio::spawn(async move {
-        warn!("Terminating workflow: {}", workflow_id);
-        match client
-            .terminate(&workflow_id, run_id.as_deref(), "Terminated via TUI")
-            .await
-        {
-            Ok(()) => {
-                info!("Successfully terminated workflow: {}", workflow_id);
-                let _ = tx.send(Action::Refresh);
-            }
-            Err(e) => {
-                error!("Failed to terminate workflow {}: {}", workflow_id, e);
-                let _ = tx.send(Action::Error(e.to_string()));
-            }
-        }
-    });
 }

@@ -1,10 +1,11 @@
 //! Logging configuration for Tempurview
 //!
-//! Logs are written to `~/.tempurview/logs/` with daily rotation.
+//! Logs are written to `~/.tempurview/logs/` with unique timestamp per run.
 
-use std::fs;
+use chrono::Local;
+use std::fs::{self, File};
 use std::path::PathBuf;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Get the tempurview config directory (~/.tempurview)
@@ -24,23 +25,32 @@ pub fn current_log_file() -> Option<PathBuf> {
 
 /// Initialize logging to file
 ///
-/// Logs are written to `~/.tempurview/logs/tempurview.YYYY-MM-DD.log`
-/// with daily rotation. Old logs are kept indefinitely.
+/// Logs are written to `~/.tempurview/logs/tempurview.YYYY-MM-DDTHH-MM-SS.log`
+/// with a unique file per run.
 ///
 /// Log level can be controlled via RUST_LOG environment variable.
 /// Default level is `info` for tempurview, `warn` for dependencies.
-pub fn init() -> Result<(), LoggingError> {
+///
+/// Returns a guard that must be kept alive for the duration of the program.
+pub fn init() -> Result<WorkerGuard, LoggingError> {
     let logs_dir = logs_dir().ok_or(LoggingError::NoHomeDir)?;
 
     // Create logs directory if it doesn't exist
     fs::create_dir_all(&logs_dir).map_err(|e| LoggingError::CreateDir(e.to_string()))?;
 
-    // Set up file appender with daily rotation
-    let file_appender = RollingFileAppender::new(Rotation::DAILY, &logs_dir, "tempurview.log");
+    // Create log file with ISO timestamp (using - instead of : for filesystem compatibility)
+    let timestamp = Local::now().format("%Y-%m-%dT%H-%M-%S");
+    let log_filename = format!("tempurview.{}.log", timestamp);
+    let log_path = logs_dir.join(&log_filename);
+
+    let file = File::create(&log_path).map_err(|e| LoggingError::CreateDir(e.to_string()))?;
+
+    // Use non_blocking writer for performance
+    let (non_blocking, guard) = NonBlocking::new(file);
 
     // Create the file layer
     let file_layer = fmt::layer()
-        .with_writer(file_appender)
+        .with_writer(non_blocking)
         .with_ansi(false) // No colors in file
         .with_target(true)
         .with_thread_ids(false)
@@ -48,7 +58,6 @@ pub fn init() -> Result<(), LoggingError> {
         .with_line_number(true);
 
     // Set up filter from RUST_LOG or use defaults
-    // Default: info for everything (can be noisy with deps, but ensures all our logs are captured)
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Initialize the subscriber
@@ -58,9 +67,9 @@ pub fn init() -> Result<(), LoggingError> {
         .init();
 
     tracing::info!("Tempurview logging initialized");
-    tracing::info!("Log directory: {}", logs_dir.display());
+    tracing::info!("Log file: {}", log_path.display());
 
-    Ok(())
+    Ok(guard)
 }
 
 /// Initialize logging for tests (no-op or minimal)
