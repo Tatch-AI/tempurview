@@ -9,6 +9,7 @@ use crate::domain::{
 };
 use crate::proto::{
     self, CountWorkflowExecutionsRequest, DescribeWorkflowExecutionRequest,
+    GetWorkflowExecutionHistoryRequest, GetWorkflowExecutionHistoryReverseRequest,
     ListWorkflowExecutionsRequest, RequestCancelWorkflowExecutionRequest,
     TerminateWorkflowExecutionRequest, WorkflowServiceClient,
 };
@@ -102,6 +103,113 @@ impl GrpcTemporalClient {
     fn make_request<T>(&self, inner: T) -> Request<T> {
         Request::new(inner)
     }
+
+    /// Get workflow input from first history event
+    async fn get_workflow_input(
+        &self,
+        workflow_id: &str,
+        run_id: Option<&str>,
+    ) -> ClientResult<serde_json::Value> {
+        let inner = GetWorkflowExecutionHistoryRequest {
+            namespace: self.namespace.clone(),
+            execution: Some(proto::temporal::api::common::v1::WorkflowExecution {
+                workflow_id: workflow_id.to_string(),
+                run_id: run_id.unwrap_or("").to_string(),
+            }),
+            maximum_page_size: 1, // Only need first event
+            next_page_token: vec![],
+            wait_new_event: false,
+            history_event_filter_type: 0,
+            skip_archival: false,
+        };
+
+        let response = self
+            .client
+            .clone()
+            .get_workflow_execution_history(self.make_request(inner))
+            .await
+            .map_err(grpc_error_to_client_error)?;
+
+        let history = response.into_inner().history;
+        if let Some(history) = history {
+            if let Some(first_event) = history.events.into_iter().next() {
+                if let Some(proto::temporal::api::history::v1::history_event::Attributes::WorkflowExecutionStartedEventAttributes(attrs)) = first_event.attributes {
+                    if let Some(input) = attrs.input {
+                        return Ok(payloads_to_json(&input));
+                    }
+                }
+            }
+        }
+
+        Err(ClientError::ParseError("No input found in workflow history".into()))
+    }
+
+    /// Get workflow result (output or failure) from last history event
+    async fn get_workflow_result(
+        &self,
+        workflow_id: &str,
+        run_id: Option<&str>,
+    ) -> ClientResult<(Option<serde_json::Value>, Option<crate::domain::FailureInfo>)> {
+        let inner = GetWorkflowExecutionHistoryReverseRequest {
+            namespace: self.namespace.clone(),
+            execution: Some(proto::temporal::api::common::v1::WorkflowExecution {
+                workflow_id: workflow_id.to_string(),
+                run_id: run_id.unwrap_or("").to_string(),
+            }),
+            maximum_page_size: 10, // Get last few events to find completion/failure
+            next_page_token: vec![],
+        };
+
+        let response = self
+            .client
+            .clone()
+            .get_workflow_execution_history_reverse(self.make_request(inner))
+            .await
+            .map_err(grpc_error_to_client_error)?;
+
+        let history = response.into_inner().history;
+        if let Some(history) = history {
+            for event in history.events {
+                match event.attributes {
+                    Some(proto::temporal::api::history::v1::history_event::Attributes::WorkflowExecutionCompletedEventAttributes(attrs)) => {
+                        let output = attrs.result.map(|r| payloads_to_json(&r));
+                        return Ok((output, None));
+                    }
+                    Some(proto::temporal::api::history::v1::history_event::Attributes::WorkflowExecutionFailedEventAttributes(attrs)) => {
+                        let failure = attrs.failure.map(failure_to_domain);
+                        return Ok((None, failure));
+                    }
+                    Some(proto::temporal::api::history::v1::history_event::Attributes::WorkflowExecutionTimedOutEventAttributes(_)) => {
+                        return Ok((None, Some(crate::domain::FailureInfo {
+                            message: "Workflow timed out".to_string(),
+                            failure_type: "Timeout".to_string(),
+                            stack_trace: None,
+                            cause: None,
+                        })));
+                    }
+                    Some(proto::temporal::api::history::v1::history_event::Attributes::WorkflowExecutionCanceledEventAttributes(_)) => {
+                        return Ok((None, Some(crate::domain::FailureInfo {
+                            message: "Workflow was canceled".to_string(),
+                            failure_type: "Canceled".to_string(),
+                            stack_trace: None,
+                            cause: None,
+                        })));
+                    }
+                    Some(proto::temporal::api::history::v1::history_event::Attributes::WorkflowExecutionTerminatedEventAttributes(attrs)) => {
+                        return Ok((None, Some(crate::domain::FailureInfo {
+                            message: attrs.reason,
+                            failure_type: "Terminated".to_string(),
+                            stack_trace: None,
+                            cause: None,
+                        })));
+                    }
+                    _ => continue,
+                }
+            }
+        }
+
+        Ok((None, None))
+    }
 }
 
 #[async_trait]
@@ -180,11 +288,21 @@ impl TemporalClient for GrpcTemporalClient {
 
         let summary = workflow_info_to_summary(info.clone())?;
 
+        // Fetch input from first history event
+        let input = self.get_workflow_input(workflow_id, run_id).await.ok();
+
+        // Fetch output/failure from last history event (only if workflow is closed)
+        let (output, failure) = if summary.close_time.is_some() {
+            self.get_workflow_result(workflow_id, run_id).await.ok().unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
+
         Ok(WorkflowDetail {
             summary,
-            input: None,
-            output: None,
-            failure: None,
+            input,
+            output,
+            failure,
             history_length: info.history_length as u64,
             memo: std::collections::HashMap::new(),
             search_attributes: std::collections::HashMap::new(),
@@ -193,11 +311,48 @@ impl TemporalClient for GrpcTemporalClient {
 
     async fn get_history(
         &self,
-        _workflow_id: &str,
-        _run_id: Option<&str>,
+        workflow_id: &str,
+        run_id: Option<&str>,
     ) -> ClientResult<Vec<HistoryEvent>> {
-        // TODO: Implement GetWorkflowExecutionHistory
-        Ok(vec![])
+        let inner = GetWorkflowExecutionHistoryRequest {
+            namespace: self.namespace.clone(),
+            execution: Some(proto::temporal::api::common::v1::WorkflowExecution {
+                workflow_id: workflow_id.to_string(),
+                run_id: run_id.unwrap_or("").to_string(),
+            }),
+            maximum_page_size: 100,
+            next_page_token: vec![],
+            wait_new_event: false,
+            history_event_filter_type: 0, // HISTORY_EVENT_FILTER_TYPE_ALL_EVENT
+            skip_archival: false,
+        };
+
+        let response = self
+            .client
+            .clone()
+            .get_workflow_execution_history(self.make_request(inner))
+            .await
+            .map_err(grpc_error_to_client_error)?;
+
+        let history = response.into_inner().history;
+        let events = history
+            .map(|h| {
+                h.events
+                    .into_iter()
+                    .map(|e| HistoryEvent {
+                        event_id: e.event_id,
+                        event_type: format!("{:?}", e.event_type),
+                        timestamp: e
+                            .event_time
+                            .map(|t| timestamp_to_datetime(&t))
+                            .unwrap_or_else(Utc::now),
+                        details: serde_json::json!({}),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(events)
     }
 
     async fn cancel(&self, workflow_id: &str, run_id: Option<&str>) -> ClientResult<()> {
@@ -332,4 +487,55 @@ fn uuid_v4() -> String {
         rng.gen::<u16>(),
         rng.gen::<u64>() & 0xffffffffffff
     )
+}
+
+/// Convert Payloads to JSON value
+fn payloads_to_json(payloads: &proto::temporal::api::common::v1::Payloads) -> serde_json::Value {
+    let values: Vec<serde_json::Value> = payloads
+        .payloads
+        .iter()
+        .map(|payload| {
+            // Try to parse as JSON first
+            if let Ok(json_str) = std::str::from_utf8(&payload.data) {
+                if let Ok(value) = serde_json::from_str(json_str) {
+                    return value;
+                }
+                // Return as string if valid UTF-8 but not JSON
+                return serde_json::Value::String(json_str.to_string());
+            }
+            // Fall back to showing data length for binary data
+            serde_json::json!({
+                "binary_data": format!("<{} bytes>", payload.data.len()),
+                "metadata": payload.metadata.iter()
+                    .map(|(k, v)| (k.clone(), String::from_utf8_lossy(v).to_string()))
+                    .collect::<std::collections::HashMap<_, _>>()
+            })
+        })
+        .collect();
+
+    if values.len() == 1 {
+        values.into_iter().next().unwrap()
+    } else {
+        serde_json::Value::Array(values)
+    }
+}
+
+/// Convert proto Failure to domain FailureInfo
+fn failure_to_domain(failure: proto::temporal::api::failure::v1::Failure) -> crate::domain::FailureInfo {
+    crate::domain::FailureInfo {
+        message: failure.message,
+        failure_type: failure.failure_info.map(|info| match info {
+            proto::temporal::api::failure::v1::failure::FailureInfo::ApplicationFailureInfo(_) => "ApplicationFailure",
+            proto::temporal::api::failure::v1::failure::FailureInfo::TimeoutFailureInfo(_) => "TimeoutFailure",
+            proto::temporal::api::failure::v1::failure::FailureInfo::CanceledFailureInfo(_) => "CanceledFailure",
+            proto::temporal::api::failure::v1::failure::FailureInfo::TerminatedFailureInfo(_) => "TerminatedFailure",
+            proto::temporal::api::failure::v1::failure::FailureInfo::ServerFailureInfo(_) => "ServerFailure",
+            proto::temporal::api::failure::v1::failure::FailureInfo::ResetWorkflowFailureInfo(_) => "ResetWorkflowFailure",
+            proto::temporal::api::failure::v1::failure::FailureInfo::ActivityFailureInfo(_) => "ActivityFailure",
+            proto::temporal::api::failure::v1::failure::FailureInfo::ChildWorkflowExecutionFailureInfo(_) => "ChildWorkflowExecutionFailure",
+            _ => "Unknown", // Handle any new failure types
+        }).unwrap_or("Unknown").to_string(),
+        stack_trace: if failure.stack_trace.is_empty() { None } else { Some(failure.stack_trace) },
+        cause: failure.cause.map(|c| Box::new(failure_to_domain(*c))),
+    }
 }
