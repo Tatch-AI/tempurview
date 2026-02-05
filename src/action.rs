@@ -1,0 +1,84 @@
+use crate::domain::{StatusCounts, WorkflowDetail, WorkflowStatus, WorkflowSummary};
+
+/// All possible user actions
+#[derive(Debug, Clone)]
+pub enum Action {
+    // Navigation
+    NavigateUp,
+    NavigateDown,
+    NavigateTop,
+    NavigateBottom,
+    PageUp,
+    PageDown,
+
+    // View switching
+    SwitchToList,
+    SwitchToDashboard,
+    ViewDetail,
+    GoBack,
+
+    // Filtering
+    SetStatusFilter(Option<WorkflowStatus>),
+    SetTypeFilter(Option<String>),
+    ClearFilters,
+    OpenFilterInput,
+    CloseFilterInput,
+    AppendFilterChar(char),
+    DeleteFilterChar,
+
+    // Data operations
+    Refresh,
+    CancelWorkflow(String),
+    TerminateWorkflow(String),
+
+    // App control
+    Quit,
+    ToggleHelp,
+
+    // Internal
+    Tick,
+    DataLoaded(DataPayload),
+    Error(String),
+}
+
+impl PartialEq for Action {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Action::NavigateUp, Action::NavigateUp) => true,
+            (Action::NavigateDown, Action::NavigateDown) => true,
+            (Action::NavigateTop, Action::NavigateTop) => true,
+            (Action::NavigateBottom, Action::NavigateBottom) => true,
+            (Action::PageUp, Action::PageUp) => true,
+            (Action::PageDown, Action::PageDown) => true,
+            (Action::SwitchToList, Action::SwitchToList) => true,
+            (Action::SwitchToDashboard, Action::SwitchToDashboard) => true,
+            (Action::ViewDetail, Action::ViewDetail) => true,
+            (Action::GoBack, Action::GoBack) => true,
+            (Action::SetStatusFilter(a), Action::SetStatusFilter(b)) => a == b,
+            (Action::SetTypeFilter(a), Action::SetTypeFilter(b)) => a == b,
+            (Action::ClearFilters, Action::ClearFilters) => true,
+            (Action::OpenFilterInput, Action::OpenFilterInput) => true,
+            (Action::CloseFilterInput, Action::CloseFilterInput) => true,
+            (Action::AppendFilterChar(a), Action::AppendFilterChar(b)) => a == b,
+            (Action::DeleteFilterChar, Action::DeleteFilterChar) => true,
+            (Action::Refresh, Action::Refresh) => true,
+            (Action::CancelWorkflow(a), Action::CancelWorkflow(b)) => a == b,
+            (Action::TerminateWorkflow(a), Action::TerminateWorkflow(b)) => a == b,
+            (Action::Quit, Action::Quit) => true,
+            (Action::ToggleHelp, Action::ToggleHelp) => true,
+            (Action::Tick, Action::Tick) => true,
+            (Action::Error(a), Action::Error(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Action {}
+
+/// Payload for loaded data
+#[derive(Debug, Clone)]
+pub enum DataPayload {
+    Counts(StatusCounts),
+    Workflows(Vec<WorkflowSummary>),
+    Detail(Box<WorkflowDetail>),
+}

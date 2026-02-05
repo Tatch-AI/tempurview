@@ -1,0 +1,40 @@
+[package]
+name = "tempurview"
+version = "0.1.0"
+edition = "2021"
+description = "A terminal user interface for viewing and managing Temporal workflows"
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# TUI framework
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# Error handling
+color-eyre = "0.6"
+thiserror = "2"
+
+# Async traits
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Futures utilities
+futures = "0.3"
+
+# Random data generation (for mock client)
+rand = "0.8"
+
+# Environment file loading
+dotenvy = "0.15"
+
+[dev-dependencies]
+pretty_assertions = "1"
