@@ -16,6 +16,7 @@ pub struct WorkflowTableWidget<'a> {
     filter: &'a WorkflowFilter,
     visible_columns: &'a HashSet<TableColumn>,
     sort: &'a Option<(TableColumn, SortDirection)>,
+    date_label: Option<&'a str>,
 }
 
 impl<'a> WorkflowTableWidget<'a> {
@@ -30,11 +31,17 @@ impl<'a> WorkflowTableWidget<'a> {
             filter,
             visible_columns,
             sort,
+            date_label: None,
         }
     }
 
+    pub fn date_label(mut self, label: Option<&'a str>) -> Self {
+        self.date_label = label;
+        self
+    }
+
     fn build_title(&self) -> String {
-        let filter_desc = self.filter.description();
+        let filter_desc = self.filter.description_with_date_label(self.date_label);
         if let LoadState::Loaded(wfs) = self.workflows {
             format!("Workflows ({}) - {}", wfs.len(), filter_desc)
         } else {
@@ -235,7 +242,6 @@ pub type WorkflowListWidget<'a> = WorkflowTableWidget<'a>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::WorkflowStatus;
     use chrono::Duration;
 
     #[test]

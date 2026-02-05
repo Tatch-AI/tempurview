@@ -1,7 +1,7 @@
 use crate::action::{Action, DataPayload, TableColumn};
 use crate::domain::{
-    SortDirection, StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter,
-    WorkflowStatus, WorkflowSummary,
+    parse_date_input, SortDirection, StatusCounts, TypeListColumn, TypeStat, WorkflowDetail,
+    WorkflowFilter, WorkflowStatus, WorkflowSummary,
 };
 use ratatui::widgets::TableState;
 use std::collections::HashSet;
@@ -21,6 +21,8 @@ pub enum InputMode {
     Normal,
     FilterInput,
     SortSelect,
+    DateRangeSelect,
+    DateRangeCustom,
 }
 
 /// Loading state for async data
@@ -65,6 +67,8 @@ pub struct App {
     // Filter state
     pub filter: WorkflowFilter,
     pub filter_input: String,
+    pub date_range_input: String,
+    pub active_date_range_label: Option<String>,
 
     // Table state (for scrolling/selection)
     pub table_state: TableState,
@@ -115,6 +119,8 @@ impl App {
 
             filter: WorkflowFilter::new(),
             filter_input: String::new(),
+            date_range_input: String::new(),
+            active_date_range_label: None,
 
             table_state,
             visible_columns,
@@ -204,7 +210,12 @@ impl App {
                 }
             }
             Action::GoBack => {
-                if self.input_mode == InputMode::SortSelect {
+                if self.input_mode == InputMode::DateRangeSelect {
+                    self.input_mode = InputMode::Normal;
+                } else if self.input_mode == InputMode::DateRangeCustom {
+                    self.input_mode = InputMode::Normal;
+                    self.date_range_input.clear();
+                } else if self.input_mode == InputMode::SortSelect {
                     self.input_mode = InputMode::Normal;
                 } else if self.input_mode == InputMode::FilterInput {
                     self.input_mode = InputMode::Normal;
@@ -273,6 +284,7 @@ impl App {
             }
             Action::ClearFilters => {
                 self.filter = WorkflowFilter::new();
+                self.active_date_range_label = None;
                 self.table_state.select(Some(0));
                 vec![Effect::LoadWorkflows]
             }
@@ -350,6 +362,67 @@ impl App {
             }
             Action::CloseSort => {
                 self.input_mode = InputMode::Normal;
+                vec![]
+            }
+            Action::EnterDateRangeMode => {
+                self.input_mode = InputMode::DateRangeSelect;
+                vec![]
+            }
+            Action::SelectDateRangePreset(preset) => {
+                self.filter.start_time_after = Some(chrono::Utc::now() - preset.duration());
+                self.filter.start_time_before = None;
+                self.active_date_range_label = Some(format!("{} ago", preset.short_label()));
+                self.input_mode = InputMode::Normal;
+                self.table_state.select(Some(0));
+                vec![Effect::LoadWorkflows]
+            }
+            Action::ClearDateRange => {
+                self.filter.start_time_after = None;
+                self.filter.start_time_before = None;
+                self.filter.close_time_after = None;
+                self.filter.close_time_before = None;
+                self.active_date_range_label = None;
+                self.input_mode = InputMode::Normal;
+                self.table_state.select(Some(0));
+                vec![Effect::LoadWorkflows]
+            }
+            Action::EnterCustomDateInput => {
+                self.input_mode = InputMode::DateRangeCustom;
+                self.date_range_input.clear();
+                vec![]
+            }
+            Action::CloseDateRangeMode => {
+                self.input_mode = InputMode::Normal;
+                vec![]
+            }
+            Action::AppendDateRangeChar(c) => {
+                self.date_range_input.push(c);
+                vec![]
+            }
+            Action::DeleteDateRangeChar => {
+                self.date_range_input.pop();
+                vec![]
+            }
+            Action::ApplyCustomDateRange => {
+                let input = self.date_range_input.clone();
+                if let Some(dt) = parse_date_input(&input) {
+                    self.filter.start_time_after = Some(dt);
+                    self.filter.start_time_before = None;
+                    self.active_date_range_label = Some(format!("{} ago", input.trim()));
+                    self.input_mode = InputMode::Normal;
+                    self.date_range_input.clear();
+                    self.table_state.select(Some(0));
+                    vec![Effect::LoadWorkflows]
+                } else {
+                    self.last_error = Some(format!("Invalid date input: '{}'. Use e.g. 2h, 3d, 1w, or 2024-01-15", input));
+                    self.input_mode = InputMode::Normal;
+                    self.date_range_input.clear();
+                    vec![]
+                }
+            }
+            Action::CancelCustomDateRange => {
+                self.input_mode = InputMode::Normal;
+                self.date_range_input.clear();
                 vec![]
             }
             Action::SortBy(key) => {

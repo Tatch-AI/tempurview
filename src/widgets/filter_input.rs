@@ -9,6 +9,8 @@ use ratatui::{
 pub struct FilterInput<'a> {
     input: &'a str,
     is_active: bool,
+    is_date_mode: bool,
+    date_label: Option<&'a str>,
 }
 
 impl<'a> FilterInput<'a> {
@@ -16,11 +18,23 @@ impl<'a> FilterInput<'a> {
         Self {
             input,
             is_active: false,
+            is_date_mode: false,
+            date_label: None,
         }
     }
 
     pub fn active(mut self, is_active: bool) -> Self {
         self.is_active = is_active;
+        self
+    }
+
+    pub fn date_mode(mut self, is_date_mode: bool) -> Self {
+        self.is_date_mode = is_date_mode;
+        self
+    }
+
+    pub fn date_label(mut self, label: Option<&'a str>) -> Self {
+        self.date_label = label;
         self
     }
 }
@@ -45,19 +59,27 @@ impl Widget for FilterInput<'_> {
         let display_text = if self.is_active {
             format!("{}_", self.input)
         } else if self.input.is_empty() {
-            "Press / to filter...".to_string()
+            if self.date_label.is_some() {
+                format!("Press / to filter, d for date range...")
+            } else {
+                "Press / to filter...".to_string()
+            }
         } else {
             self.input.to_string()
+        };
+
+        let title: &str = if self.is_date_mode {
+            "Date range (e.g. 2h, 3d, 1w, 2024-01-15) — Enter to apply, Esc to cancel"
+        } else if self.is_active {
+            "Filter (Enter to apply, Esc to cancel)"
+        } else {
+            "Filter"
         };
 
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(if self.is_active {
-                "Filter (Enter to apply, Esc to cancel)"
-            } else {
-                "Filter"
-            });
+            .title(title);
 
         let paragraph = Paragraph::new(display_text).style(style).block(block);
 

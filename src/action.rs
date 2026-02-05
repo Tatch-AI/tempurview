@@ -1,4 +1,6 @@
-use crate::domain::{StatusCounts, TypeStat, WorkflowDetail, WorkflowStatus, WorkflowSummary};
+use crate::domain::{
+    DateRangePreset, StatusCounts, TypeStat, WorkflowDetail, WorkflowStatus, WorkflowSummary,
+};
 
 /// Table columns that can be toggled
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,6 +66,17 @@ pub enum Action {
     SortBy(u8),
     CloseSort,
 
+    // Date range
+    EnterDateRangeMode,
+    SelectDateRangePreset(DateRangePreset),
+    ClearDateRange,
+    EnterCustomDateInput,
+    CloseDateRangeMode,
+    AppendDateRangeChar(char),
+    DeleteDateRangeChar,
+    ApplyCustomDateRange,
+    CancelCustomDateRange,
+
     // Data operations
     Refresh,
     CancelWorkflow(String),
@@ -104,6 +117,15 @@ impl PartialEq for Action {
             (Action::CloseFilterInput, Action::CloseFilterInput) => true,
             (Action::AppendFilterChar(a), Action::AppendFilterChar(b)) => a == b,
             (Action::DeleteFilterChar, Action::DeleteFilterChar) => true,
+            (Action::EnterDateRangeMode, Action::EnterDateRangeMode) => true,
+            (Action::SelectDateRangePreset(a), Action::SelectDateRangePreset(b)) => a == b,
+            (Action::ClearDateRange, Action::ClearDateRange) => true,
+            (Action::EnterCustomDateInput, Action::EnterCustomDateInput) => true,
+            (Action::CloseDateRangeMode, Action::CloseDateRangeMode) => true,
+            (Action::AppendDateRangeChar(a), Action::AppendDateRangeChar(b)) => a == b,
+            (Action::DeleteDateRangeChar, Action::DeleteDateRangeChar) => true,
+            (Action::ApplyCustomDateRange, Action::ApplyCustomDateRange) => true,
+            (Action::CancelCustomDateRange, Action::CancelCustomDateRange) => true,
             (Action::Refresh, Action::Refresh) => true,
             (Action::CancelWorkflow(a), Action::CancelWorkflow(b)) => a == b,
             (Action::TerminateWorkflow(a), Action::TerminateWorkflow(b)) => a == b,

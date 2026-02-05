@@ -1,5 +1,6 @@
 use crate::action::{Action, TableColumn};
 use crate::app::{InputMode, View};
+use crate::domain::DateRangePreset;
 use crossterm::event::{
     Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
@@ -85,6 +86,27 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
             KeyCode::Char(c) => Some(Action::SortBy(c as u8)),
             _ => None,
         },
+        InputMode::DateRangeSelect => match key.code {
+            KeyCode::Char('1') => Some(Action::SelectDateRangePreset(DateRangePreset::LastHour)),
+            KeyCode::Char('2') => Some(Action::SelectDateRangePreset(DateRangePreset::Last6Hours)),
+            KeyCode::Char('3') => {
+                Some(Action::SelectDateRangePreset(DateRangePreset::Last24Hours))
+            }
+            KeyCode::Char('4') => Some(Action::SelectDateRangePreset(DateRangePreset::Last3Days)),
+            KeyCode::Char('5') => Some(Action::SelectDateRangePreset(DateRangePreset::Last7Days)),
+            KeyCode::Char('6') => Some(Action::SelectDateRangePreset(DateRangePreset::Last30Days)),
+            KeyCode::Char('0') => Some(Action::ClearDateRange),
+            KeyCode::Char('c') => Some(Action::EnterCustomDateInput),
+            KeyCode::Esc => Some(Action::CloseDateRangeMode),
+            _ => None,
+        },
+        InputMode::DateRangeCustom => match key.code {
+            KeyCode::Enter => Some(Action::ApplyCustomDateRange),
+            KeyCode::Esc => Some(Action::CancelCustomDateRange),
+            KeyCode::Char(c) => Some(Action::AppendDateRangeChar(c)),
+            KeyCode::Backspace => Some(Action::DeleteDateRangeChar),
+            _ => None,
+        },
         InputMode::Normal => {
             // Check for Ctrl+C first
             if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -106,6 +128,9 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::PageDown => Some(Action::PageDown),
                 KeyCode::Home => Some(Action::NavigateTop),
                 KeyCode::End => Some(Action::NavigateBottom),
+                KeyCode::Char('d') if view == View::WorkflowList => {
+                    Some(Action::EnterDateRangeMode)
+                }
                 KeyCode::Char('s') if view == View::WorkflowList || view == View::TypeList => {
                     Some(Action::EnterSortMode)
                 }

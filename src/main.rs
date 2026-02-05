@@ -415,10 +415,16 @@ fn render(app: &App, frame: &mut Frame) {
     );
 
     // Render filter input
-    frame.render_widget(
-        FilterInput::new(&app.filter_input).active(app.input_mode == InputMode::FilterInput),
-        layout[2],
-    );
+    let filter_widget = if app.input_mode == InputMode::DateRangeCustom {
+        FilterInput::new(&app.date_range_input)
+            .active(true)
+            .date_mode(true)
+    } else {
+        FilterInput::new(&app.filter_input)
+            .active(app.input_mode == InputMode::FilterInput)
+            .date_label(app.active_date_range_label.as_deref())
+    };
+    frame.render_widget(filter_widget, layout[2]);
 
     // Render main content based on view
     match app.view {
@@ -430,7 +436,8 @@ fn render(app: &App, frame: &mut Frame) {
                     &app.filter,
                     &app.visible_columns,
                     &app.workflow_sort,
-                ),
+                )
+                .date_label(app.active_date_range_label.as_deref()),
                 layout[3],
                 &mut table_state,
             );
@@ -518,7 +525,12 @@ fn handle_effects(effects: Vec<Effect>, cli_handle: &CliHandle, app: &App, defau
                 cli_handle.load_counts();
             }
             Effect::LoadWorkflows => {
-                cli_handle.load_workflows(app.filter.clone(), default_limit);
+                let effective_limit = if app.filter.has_date_range() {
+                    default_limit.max(1000)
+                } else {
+                    default_limit
+                };
+                cli_handle.load_workflows(app.filter.clone(), effective_limit);
             }
             Effect::LoadTypeStats => {
                 cli_handle.load_type_stats(500);

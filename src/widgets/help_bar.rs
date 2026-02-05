@@ -16,6 +16,20 @@ impl HelpBar {
     pub fn for_view(view: View, input_mode: InputMode) -> Self {
         let shortcuts = match (view, input_mode) {
             (_, InputMode::FilterInput) => vec![("Enter", "Apply"), ("Esc", "Cancel")],
+            (_, InputMode::DateRangeSelect) => vec![
+                ("1", "1h"),
+                ("2", "6h"),
+                ("3", "24h"),
+                ("4", "3d"),
+                ("5", "7d"),
+                ("6", "30d"),
+                ("0", "Clear"),
+                ("c", "Custom"),
+                ("Esc", "Cancel"),
+            ],
+            (_, InputMode::DateRangeCustom) => {
+                vec![("Enter", "Apply"), ("Esc", "Cancel")]
+            }
             (View::WorkflowList, InputMode::SortSelect) => vec![
                 ("s", "Status"),
                 ("t", "Type"),
@@ -32,6 +46,7 @@ impl HelpBar {
             (View::WorkflowList, _) => vec![
                 ("j/k", "Navigate"),
                 ("Enter", "Details"),
+                ("d", "Date"),
                 ("s", "Sort"),
                 ("T", "Types"),
                 ("/", "Filter"),
@@ -124,6 +139,12 @@ Filtering:
   0           Clear all filters
   ]           Next status filter
   [           Previous status filter
+
+Date Range:
+  d           Enter date range mode
+    then: 1-6  Preset (1h/6h/24h/3d/7d/30d)
+    then: 0    Clear date range
+    then: c    Custom (e.g. 2h, 3d, 1w)
 
 Column Visibility:
   F1          Toggle Status column
