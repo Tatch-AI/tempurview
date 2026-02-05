@@ -498,12 +498,12 @@ fn render_title(app: &App, frame: &mut Frame, area: Rect) {
 fn render_error(error: &str, frame: &mut Frame, area: Rect) {
     let error_area = Rect {
         x: area.x + 2,
-        y: area.height.saturating_sub(3),
+        y: area.height.saturating_sub(4),
         width: area.width.saturating_sub(4),
-        height: 2,
+        height: 3,
     };
 
-    let error_widget = Paragraph::new(format!(" Error: {} ", error))
+    let error_widget = Paragraph::new(format!(" {} ", error))
         .style(Style::default().fg(Color::White).bg(Color::Red))
         .block(Block::default().borders(Borders::ALL));
 
