@@ -16,24 +16,15 @@ impl HelpBar {
     pub fn for_view(view: View, input_mode: InputMode) -> Self {
         let shortcuts = match (view, input_mode) {
             (_, InputMode::FilterInput) => vec![("Enter", "Apply"), ("Esc", "Cancel")],
-            (View::Dashboard, _) => vec![
-                ("j/k", "Navigate"),
-                ("1-5", "Filter status"),
-                ("0", "Clear"),
-                ("Enter", "View list"),
-                ("r", "Refresh"),
-                ("?", "Help"),
-                ("q", "Quit"),
-            ],
             (View::WorkflowList, _) => vec![
                 ("j/k", "Navigate"),
                 ("Enter", "Details"),
                 ("/", "Filter"),
                 ("1-5", "Status"),
-                ("0", "Clear"),
-                ("Esc", "Back"),
+                ("[/]", "Cycle"),
+                ("F1-4", "Columns"),
                 ("r", "Refresh"),
-                ("q", "Quit"),
+                ("?", "Help"),
             ],
             (View::WorkflowDetail, _) => vec![
                 ("Esc", "Back"),
@@ -103,6 +94,14 @@ Filtering:
   4           Filter: Canceled
   5           Filter: Terminated
   0           Clear all filters
+  ]           Next status filter
+  [           Previous status filter
+
+Column Visibility:
+  F1          Toggle Status column
+  F2          Toggle Type column
+  F3          Toggle Workflow ID column
+  F4          Toggle Started column
 
 Actions:
   r           Refresh data
@@ -111,8 +110,8 @@ Actions:
 
 Other:
   ?           Toggle this help
-  q           Quit
-  Ctrl+C      Quit
+  q           Quit (press twice)
+  Ctrl+C      Quit (press twice)
 "#;
 
         let block = Block::default()

@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::action::{Action, TableColumn};
 use crate::app::{InputMode, View};
 use crossterm::event::{
     Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
@@ -102,7 +102,6 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Home => Some(Action::NavigateTop),
                 KeyCode::End => Some(Action::NavigateBottom),
                 KeyCode::Enter => match view {
-                    View::Dashboard => Some(Action::SwitchToList),
                     View::WorkflowList => Some(Action::ViewDetail),
                     View::WorkflowDetail => None,
                 },
@@ -124,6 +123,14 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                     crate::domain::WorkflowStatus::Terminated,
                 ))),
                 KeyCode::Char('0') => Some(Action::ClearFilters),
+                // Cycle through status filters
+                KeyCode::Char(']') => Some(Action::NextStatusFilter),
+                KeyCode::Char('[') => Some(Action::PrevStatusFilter),
+                // Column visibility toggles (F1-F4)
+                KeyCode::F(1) => Some(Action::ToggleColumn(TableColumn::Status)),
+                KeyCode::F(2) => Some(Action::ToggleColumn(TableColumn::Type)),
+                KeyCode::F(3) => Some(Action::ToggleColumn(TableColumn::WorkflowId)),
+                KeyCode::F(4) => Some(Action::ToggleColumn(TableColumn::Started)),
                 // View-specific shortcuts
                 KeyCode::Char('c') if view == View::WorkflowDetail => {
                     Some(Action::CancelWorkflow(String::new())) // ID filled in by app
@@ -157,7 +164,7 @@ mod tests {
     #[test]
     fn test_quit_mapping() {
         let key = make_key(KeyCode::Char('q'));
-        let action = key_to_action(key, View::Dashboard, InputMode::Normal);
+        let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
         assert_eq!(action, Some(Action::Quit));
     }
 
@@ -187,16 +194,13 @@ mod tests {
     fn test_filter_input_mode() {
         let key = make_key(KeyCode::Char('q'));
         // In filter input mode, 'q' should type 'q', not quit
-        let action = key_to_action(key, View::Dashboard, InputMode::FilterInput);
+        let action = key_to_action(key, View::WorkflowList, InputMode::FilterInput);
         assert_eq!(action, Some(Action::AppendFilterChar('q')));
     }
 
     #[test]
     fn test_enter_view_specific() {
         let key = make_key(KeyCode::Enter);
-
-        let action = key_to_action(key, View::Dashboard, InputMode::Normal);
-        assert_eq!(action, Some(Action::SwitchToList));
 
         let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
         assert_eq!(action, Some(Action::ViewDetail));
@@ -215,7 +219,7 @@ mod tests {
     #[test]
     fn test_status_filter_shortcuts() {
         let key = make_key(KeyCode::Char('1'));
-        let action = key_to_action(key, View::Dashboard, InputMode::Normal);
+        let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
         assert_eq!(
             action,
             Some(Action::SetStatusFilter(Some(
@@ -224,7 +228,7 @@ mod tests {
         );
 
         let key = make_key(KeyCode::Char('3'));
-        let action = key_to_action(key, View::Dashboard, InputMode::Normal);
+        let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
         assert_eq!(
             action,
             Some(Action::SetStatusFilter(Some(
@@ -233,14 +237,14 @@ mod tests {
         );
 
         let key = make_key(KeyCode::Char('0'));
-        let action = key_to_action(key, View::Dashboard, InputMode::Normal);
+        let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
         assert_eq!(action, Some(Action::ClearFilters));
     }
 
     #[test]
     fn test_ctrl_c_quits() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        let action = key_to_action(key, View::Dashboard, InputMode::Normal);
+        let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
         assert_eq!(action, Some(Action::Quit));
     }
 }

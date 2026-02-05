@@ -1,23 +1,33 @@
+use crate::action::TableColumn;
 use crate::app::LoadState;
 use crate::domain::{WorkflowFilter, WorkflowSummary};
 use chrono::{DateTime, Utc};
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, Widget},
+    layout::{Constraint, Rect},
+    style::{Color, Modifier, Style, Stylize},
+    widgets::{Block, Borders, Cell, Paragraph, Row, StatefulWidget, Table, TableState, Widget},
 };
+use std::collections::HashSet;
 
-/// Renders a list of workflows with selection
-pub struct WorkflowListWidget<'a> {
+/// Renders a table of workflows with selection
+pub struct WorkflowTableWidget<'a> {
     workflows: &'a LoadState<Vec<WorkflowSummary>>,
     filter: &'a WorkflowFilter,
+    visible_columns: &'a HashSet<TableColumn>,
 }
 
-impl<'a> WorkflowListWidget<'a> {
-    pub fn new(workflows: &'a LoadState<Vec<WorkflowSummary>>, filter: &'a WorkflowFilter) -> Self {
-        Self { workflows, filter }
+impl<'a> WorkflowTableWidget<'a> {
+    pub fn new(
+        workflows: &'a LoadState<Vec<WorkflowSummary>>,
+        filter: &'a WorkflowFilter,
+        visible_columns: &'a HashSet<TableColumn>,
+    ) -> Self {
+        Self {
+            workflows,
+            filter,
+            visible_columns,
+        }
     }
 
     fn build_title(&self) -> String {
@@ -28,10 +38,78 @@ impl<'a> WorkflowListWidget<'a> {
             format!("Workflows - {}", filter_desc)
         }
     }
+
+    fn build_header(&self) -> Row<'static> {
+        let mut cells = Vec::new();
+
+        if self.visible_columns.contains(&TableColumn::Status) {
+            cells.push(Cell::from("Status").style(Style::default().bold()));
+        }
+        if self.visible_columns.contains(&TableColumn::Type) {
+            cells.push(Cell::from("Type").style(Style::default().bold()));
+        }
+        if self.visible_columns.contains(&TableColumn::WorkflowId) {
+            cells.push(Cell::from("Workflow ID").style(Style::default().bold()));
+        }
+        if self.visible_columns.contains(&TableColumn::Started) {
+            cells.push(Cell::from("Started").style(Style::default().bold()));
+        }
+
+        Row::new(cells)
+            .style(Style::default().fg(Color::Cyan))
+            .bottom_margin(1)
+    }
+
+    fn build_widths(&self) -> Vec<Constraint> {
+        let mut widths = Vec::new();
+
+        if self.visible_columns.contains(&TableColumn::Status) {
+            widths.push(Constraint::Length(8));
+        }
+        if self.visible_columns.contains(&TableColumn::Type) {
+            widths.push(Constraint::Percentage(35));
+        }
+        if self.visible_columns.contains(&TableColumn::WorkflowId) {
+            widths.push(Constraint::Percentage(45));
+        }
+        if self.visible_columns.contains(&TableColumn::Started) {
+            widths.push(Constraint::Length(12));
+        }
+
+        widths
+    }
+
+    fn workflow_to_row(&self, wf: &WorkflowSummary) -> Row<'static> {
+        let mut cells = Vec::new();
+
+        if self.visible_columns.contains(&TableColumn::Status) {
+            cells.push(
+                Cell::from(format!("{:>6}", wf.status.short_name()))
+                    .style(Style::default().fg(wf.status.color())),
+            );
+        }
+        if self.visible_columns.contains(&TableColumn::Type) {
+            cells.push(Cell::from(truncate_string(&wf.workflow_type, 35)));
+        }
+        if self.visible_columns.contains(&TableColumn::WorkflowId) {
+            cells.push(
+                Cell::from(truncate_string(&wf.workflow_id, 45))
+                    .style(Style::default().add_modifier(Modifier::DIM)),
+            );
+        }
+        if self.visible_columns.contains(&TableColumn::Started) {
+            cells.push(
+                Cell::from(format_duration_since(wf.start_time))
+                    .style(Style::default().add_modifier(Modifier::DIM)),
+            );
+        }
+
+        Row::new(cells)
+    }
 }
 
-impl StatefulWidget for WorkflowListWidget<'_> {
-    type State = ListState;
+impl StatefulWidget for WorkflowTableWidget<'_> {
+    type State = TableState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         match self.workflows {
@@ -48,21 +126,29 @@ impl StatefulWidget for WorkflowListWidget<'_> {
                     return;
                 }
 
-                let items: Vec<ListItem> = workflows
+                let header = self.build_header();
+                let widths = self.build_widths();
+
+                let rows: Vec<Row> = workflows
                     .iter()
-                    .map(|wf| workflow_to_list_item(wf))
+                    .map(|wf| self.workflow_to_row(wf))
                     .collect();
 
-                let list = List::new(items)
+                let table = Table::new(rows, widths)
+                    .header(header)
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
                             .title(self.build_title()),
                     )
-                    .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
-                    .highlight_symbol("> ");
+                    .row_highlight_style(
+                        Style::default()
+                            .add_modifier(Modifier::REVERSED)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .highlight_symbol("▶ ");
 
-                StatefulWidget::render(list, area, buf, state);
+                StatefulWidget::render(table, area, buf, state);
             }
             LoadState::Loading => {
                 let loading = Paragraph::new("Loading workflows...")
@@ -76,7 +162,7 @@ impl StatefulWidget for WorkflowListWidget<'_> {
             }
             LoadState::Error(e) => {
                 let error = Paragraph::new(format!("Error: {}", e))
-                    .style(Style::default().fg(ratatui::style::Color::Red))
+                    .style(Style::default().fg(Color::Red))
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
@@ -98,43 +184,13 @@ impl StatefulWidget for WorkflowListWidget<'_> {
     }
 }
 
-/// Pure function: convert workflow to list item
-fn workflow_to_list_item(wf: &WorkflowSummary) -> ListItem<'static> {
-    let status_span = Span::styled(
-        format!("{:>6}", wf.status.short_name()),
-        Style::default().fg(wf.status.color()),
-    );
-
-    let time_span = Span::styled(
-        format!("{:>10}", format_duration_since(wf.start_time)),
-        Style::default().add_modifier(Modifier::DIM),
-    );
-
-    // Truncate workflow type if too long
-    let wf_type = if wf.workflow_type.len() > 30 {
-        format!("{}...", &wf.workflow_type[..27])
+/// Truncate a string to max length with ellipsis
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() > max_len {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
     } else {
-        wf.workflow_type.clone()
-    };
-
-    // Truncate workflow ID if too long
-    let wf_id = if wf.workflow_id.len() > 40 {
-        format!("{}...", &wf.workflow_id[..37])
-    } else {
-        wf.workflow_id.clone()
-    };
-
-    let line = Line::from(vec![
-        status_span,
-        Span::raw(" | "),
-        Span::raw(format!("{:<30}", wf_type)),
-        Span::raw(" | "),
-        Span::styled(wf_id, Style::default().add_modifier(Modifier::DIM)),
-        Span::raw(" | "),
-        time_span,
-    ]);
-
-    ListItem::new(line)
+        s.to_string()
+    }
 }
 
 /// Pure function: format duration since start
@@ -157,6 +213,9 @@ pub fn format_duration_since(start: DateTime<Utc>) -> String {
     }
 }
 
+// Re-export for backwards compatibility during transition
+pub type WorkflowListWidget<'a> = WorkflowTableWidget<'a>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,19 +233,9 @@ mod tests {
     }
 
     #[test]
-    fn test_workflow_to_list_item() {
-        let wf = WorkflowSummary {
-            workflow_id: "test-123".to_string(),
-            run_id: "run-456".to_string(),
-            workflow_type: "TestWorkflow".to_string(),
-            status: WorkflowStatus::Running,
-            start_time: Utc::now(),
-            close_time: None,
-            task_queue: "default".to_string(),
-        };
-
-        let item = workflow_to_list_item(&wf);
-        // Just verify it doesn't panic
-        let _ = item;
+    fn test_truncate_string() {
+        assert_eq!(truncate_string("short", 10), "short");
+        assert_eq!(truncate_string("this is a long string", 10), "this is...");
+        assert_eq!(truncate_string("exactly10!", 10), "exactly10!");
     }
 }

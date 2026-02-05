@@ -1,12 +1,12 @@
-use crate::action::{Action, DataPayload};
-use crate::domain::{StatusCounts, WorkflowDetail, WorkflowFilter, WorkflowSummary};
-use ratatui::widgets::ListState;
+use crate::action::{Action, DataPayload, TableColumn};
+use crate::domain::{StatusCounts, WorkflowDetail, WorkflowFilter, WorkflowStatus, WorkflowSummary};
+use ratatui::widgets::TableState;
+use std::collections::HashSet;
 use std::time::Instant;
 
 /// Which view is currently active
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
-    Dashboard,
     WorkflowList,
     WorkflowDetail,
 }
@@ -61,14 +61,17 @@ pub struct App {
     pub filter: WorkflowFilter,
     pub filter_input: String,
 
-    // List state (for scrolling)
-    pub list_state: ListState,
-    pub dashboard_list_state: ListState,
+    // Table state (for scrolling/selection)
+    pub table_state: TableState,
+
+    // Column visibility
+    pub visible_columns: HashSet<TableColumn>,
 
     // App control
     pub should_quit: bool,
     pub last_error: Option<String>,
     pub last_refresh: Option<Instant>,
+    pub last_quit_attempt: Option<Instant>,
 
     // Page size for scrolling
     pub page_size: usize,
@@ -82,14 +85,13 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
-        let mut list_state = ListState::default();
-        list_state.select(Some(0));
+        let table_state = TableState::default().with_selected(0);
 
-        let mut dashboard_list_state = ListState::default();
-        dashboard_list_state.select(Some(0));
+        // All columns visible by default
+        let visible_columns: HashSet<TableColumn> = TableColumn::all().iter().copied().collect();
 
         Self {
-            view: View::Dashboard,
+            view: View::WorkflowList,
             view_stack: Vec::new(),
             input_mode: InputMode::Normal,
             show_help: false,
@@ -101,12 +103,13 @@ impl App {
             filter: WorkflowFilter::new(),
             filter_input: String::new(),
 
-            list_state,
-            dashboard_list_state,
+            table_state,
+            visible_columns,
 
             should_quit: false,
             last_error: None,
             last_refresh: None,
+            last_quit_attempt: None,
 
             page_size: 10,
         }
@@ -115,8 +118,8 @@ impl App {
     /// Apply an action and return any side effects to perform
     /// This is a pure function - no I/O happens here
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
-        // Clear last error on any action
-        if !matches!(action, Action::Error(_) | Action::Tick) {
+        // Clear last error on any action (except Error, Tick, and Quit which sets its own message)
+        if !matches!(action, Action::Error(_) | Action::Tick | Action::Quit) {
             self.last_error = None;
         }
 
@@ -149,16 +152,6 @@ impl App {
                 }
                 vec![]
             }
-            Action::SwitchToList => {
-                self.view_stack.push(self.view);
-                self.view = View::WorkflowList;
-                vec![Effect::LoadWorkflows]
-            }
-            Action::SwitchToDashboard => {
-                self.view = View::Dashboard;
-                self.view_stack.clear();
-                vec![]
-            }
             Action::ViewDetail => {
                 if let Some(wf_id) = self.selected_workflow_id() {
                     let id = wf_id.to_string();
@@ -177,25 +170,69 @@ impl App {
                 } else if let Some(prev_view) = self.view_stack.pop() {
                     self.view = prev_view;
                     self.selected_workflow = None;
-                } else if self.view != View::Dashboard {
-                    self.view = View::Dashboard;
+                } else if self.view == View::WorkflowDetail {
+                    // Go back to list from detail
+                    self.view = View::WorkflowList;
                     self.selected_workflow = None;
                 }
                 vec![]
             }
             Action::SetStatusFilter(status) => {
                 self.filter.status = status;
-                self.list_state.select(Some(0));
+                self.table_state.select(Some(0));
                 vec![Effect::LoadWorkflows]
             }
             Action::SetTypeFilter(workflow_type) => {
                 self.filter.workflow_type = workflow_type;
-                self.list_state.select(Some(0));
+                self.table_state.select(Some(0));
                 vec![Effect::LoadWorkflows]
+            }
+            Action::NextStatusFilter => {
+                let statuses = WorkflowStatus::all();
+                let next_status = match self.filter.status {
+                    None => Some(statuses[0]),
+                    Some(current) => {
+                        let current_idx = statuses.iter().position(|s| *s == current).unwrap_or(0);
+                        let next_idx = (current_idx + 1) % statuses.len();
+                        Some(statuses[next_idx])
+                    }
+                };
+                self.filter.status = next_status;
+                self.table_state.select(Some(0));
+                vec![Effect::LoadWorkflows]
+            }
+            Action::PrevStatusFilter => {
+                let statuses = WorkflowStatus::all();
+                let prev_status = match self.filter.status {
+                    None => Some(statuses[statuses.len() - 1]),
+                    Some(current) => {
+                        let current_idx = statuses.iter().position(|s| *s == current).unwrap_or(0);
+                        let prev_idx = if current_idx == 0 {
+                            statuses.len() - 1
+                        } else {
+                            current_idx - 1
+                        };
+                        Some(statuses[prev_idx])
+                    }
+                };
+                self.filter.status = prev_status;
+                self.table_state.select(Some(0));
+                vec![Effect::LoadWorkflows]
+            }
+            Action::ToggleColumn(column) => {
+                if self.visible_columns.contains(&column) {
+                    // Don't allow hiding all columns - keep at least one
+                    if self.visible_columns.len() > 1 {
+                        self.visible_columns.remove(&column);
+                    }
+                } else {
+                    self.visible_columns.insert(column);
+                }
+                vec![]
             }
             Action::ClearFilters => {
                 self.filter = WorkflowFilter::new();
-                self.list_state.select(Some(0));
+                self.table_state.select(Some(0));
                 vec![Effect::LoadWorkflows]
             }
             Action::OpenFilterInput => {
@@ -256,7 +293,21 @@ impl App {
                 }
             }
             Action::Quit => {
-                self.should_quit = true;
+                let now = Instant::now();
+                if let Some(last_attempt) = self.last_quit_attempt {
+                    // If second Ctrl+C within 2 seconds, quit
+                    if now.duration_since(last_attempt).as_secs() < 2 {
+                        self.should_quit = true;
+                    } else {
+                        // Too much time passed, reset and show message
+                        self.last_quit_attempt = Some(now);
+                        self.last_error = Some("Press Ctrl+C again to quit".to_string());
+                    }
+                } else {
+                    // First Ctrl+C, show message
+                    self.last_quit_attempt = Some(now);
+                    self.last_error = Some("Press Ctrl+C again to quit".to_string());
+                }
                 vec![]
             }
             Action::ToggleHelp => {
@@ -280,9 +331,9 @@ impl App {
                         self.workflows = LoadState::Loaded(wfs);
                         // Reset selection if it's out of bounds
                         if let LoadState::Loaded(ref workflows) = self.workflows {
-                            let selected = self.list_state.selected().unwrap_or(0);
+                            let selected = self.table_state.selected().unwrap_or(0);
                             if selected >= workflows.len() && !workflows.is_empty() {
-                                self.list_state.select(Some(workflows.len() - 1));
+                                self.table_state.select(Some(workflows.len() - 1));
                             }
                         }
                     }
@@ -316,65 +367,53 @@ impl App {
             return;
         }
 
-        let list_state = self.current_list_state_mut();
-        let current = list_state.selected().unwrap_or(0);
+        let table_state = self.current_table_state_mut();
+        let current = table_state.selected().unwrap_or(0);
         let next = if current >= len - 1 {
             current
         } else {
             current + 1
         };
-        list_state.select(Some(next));
+        table_state.select(Some(next));
     }
 
     fn select_previous(&mut self) {
-        let list_state = self.current_list_state_mut();
-        let current = list_state.selected().unwrap_or(0);
+        let table_state = self.current_table_state_mut();
+        let current = table_state.selected().unwrap_or(0);
         let prev = current.saturating_sub(1);
-        list_state.select(Some(prev));
+        table_state.select(Some(prev));
     }
 
     fn select_first(&mut self) {
-        let list_state = self.current_list_state_mut();
-        list_state.select(Some(0));
+        let table_state = self.current_table_state_mut();
+        table_state.select(Some(0));
     }
 
     fn select_last(&mut self) {
         let len = self.current_list_len();
         if len > 0 {
-            let list_state = self.current_list_state_mut();
-            list_state.select(Some(len - 1));
+            let table_state = self.current_table_state_mut();
+            table_state.select(Some(len - 1));
         }
     }
 
-    fn current_list_state_mut(&mut self) -> &mut ListState {
-        match self.view {
-            View::Dashboard => &mut self.dashboard_list_state,
-            View::WorkflowList | View::WorkflowDetail => &mut self.list_state,
-        }
+    fn current_table_state_mut(&mut self) -> &mut TableState {
+        // Always navigate the workflow table with j/k
+        &mut self.table_state
     }
 
     fn current_list_len(&self) -> usize {
-        match self.view {
-            View::Dashboard => {
-                if let LoadState::Loaded(ref counts) = self.status_counts {
-                    counts.non_zero().len().max(1)
-                } else {
-                    0
-                }
-            }
-            View::WorkflowList | View::WorkflowDetail => {
-                if let LoadState::Loaded(ref workflows) = self.workflows {
-                    workflows.len()
-                } else {
-                    0
-                }
-            }
+        // Always use workflow list length for navigation
+        if let LoadState::Loaded(ref workflows) = self.workflows {
+            workflows.len()
+        } else {
+            0
         }
     }
 
     pub fn selected_workflow_id(&self) -> Option<&str> {
         if let LoadState::Loaded(ref workflows) = self.workflows {
-            let selected = self.list_state.selected().unwrap_or(0);
+            let selected = self.table_state.selected().unwrap_or(0);
             workflows.get(selected).map(|wf| wf.workflow_id.as_str())
         } else {
             None
@@ -383,7 +422,7 @@ impl App {
 
     pub fn selected_workflow_run_id(&self) -> Option<&str> {
         if let LoadState::Loaded(ref workflows) = self.workflows {
-            let selected = self.list_state.selected().unwrap_or(0);
+            let selected = self.table_state.selected().unwrap_or(0);
             workflows.get(selected).map(|wf| wf.run_id.as_str())
         } else {
             None
@@ -445,26 +484,26 @@ mod tests {
         app.view = View::WorkflowList;
         app.workflows = LoadState::Loaded(make_test_workflows());
 
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.table_state.selected(), Some(0));
 
         app.update(Action::NavigateDown);
-        assert_eq!(app.list_state.selected(), Some(1));
+        assert_eq!(app.table_state.selected(), Some(1));
 
         app.update(Action::NavigateDown);
-        assert_eq!(app.list_state.selected(), Some(2));
+        assert_eq!(app.table_state.selected(), Some(2));
 
         // Should not go past the end
         app.update(Action::NavigateDown);
-        assert_eq!(app.list_state.selected(), Some(2));
+        assert_eq!(app.table_state.selected(), Some(2));
 
         app.update(Action::NavigateUp);
-        assert_eq!(app.list_state.selected(), Some(1));
+        assert_eq!(app.table_state.selected(), Some(1));
 
         app.update(Action::NavigateTop);
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.table_state.selected(), Some(0));
 
         app.update(Action::NavigateBottom);
-        assert_eq!(app.list_state.selected(), Some(2));
+        assert_eq!(app.table_state.selected(), Some(2));
     }
 
     #[test]
@@ -484,6 +523,12 @@ mod tests {
         let mut app = App::new();
         assert!(!app.should_quit);
 
+        // First quit shows warning
+        app.update(Action::Quit);
+        assert!(!app.should_quit);
+        assert_eq!(app.last_error, Some("Press Ctrl+C again to quit".to_string()));
+
+        // Second quit actually quits
         app.update(Action::Quit);
         assert!(app.should_quit);
     }
@@ -493,21 +538,14 @@ mod tests {
         let mut app = App::new();
         app.workflows = LoadState::Loaded(make_test_workflows());
 
-        assert_eq!(app.view, View::Dashboard);
-
-        app.update(Action::SwitchToList);
         assert_eq!(app.view, View::WorkflowList);
-        assert_eq!(app.view_stack, vec![View::Dashboard]);
 
         app.update(Action::ViewDetail);
         assert_eq!(app.view, View::WorkflowDetail);
-        assert_eq!(app.view_stack, vec![View::Dashboard, View::WorkflowList]);
+        assert_eq!(app.view_stack, vec![View::WorkflowList]);
 
         app.update(Action::GoBack);
         assert_eq!(app.view, View::WorkflowList);
-
-        app.update(Action::GoBack);
-        assert_eq!(app.view, View::Dashboard);
     }
 
     #[test]
@@ -582,7 +620,7 @@ mod tests {
     fn test_selected_workflow_id() {
         let mut app = App::new();
         app.workflows = LoadState::Loaded(make_test_workflows());
-        app.list_state.select(Some(1));
+        app.table_state.select(Some(1));
 
         assert_eq!(app.selected_workflow_id(), Some("wf-2"));
     }

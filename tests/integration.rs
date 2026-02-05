@@ -94,7 +94,7 @@ async fn test_mock_client_describe_not_found() {
 fn test_app_initial_state() {
     let app = App::new();
 
-    assert_eq!(app.view, View::Dashboard);
+    assert_eq!(app.view, View::WorkflowList);
     assert!(matches!(app.status_counts, LoadState::NotLoaded));
     assert!(matches!(app.workflows, LoadState::NotLoaded));
     assert!(!app.should_quit);
@@ -178,10 +178,6 @@ fn test_app_view_navigation() {
     let mut app = App::new();
     app.workflows = LoadState::Loaded(vec![common::make_test_workflow(1, WorkflowStatus::Running)]);
 
-    assert_eq!(app.view, View::Dashboard);
-
-    // Go to list
-    app.update(Action::SwitchToList);
     assert_eq!(app.view, View::WorkflowList);
 
     // Go to detail
@@ -191,10 +187,6 @@ fn test_app_view_navigation() {
     // Go back to list
     app.update(Action::GoBack);
     assert_eq!(app.view, View::WorkflowList);
-
-    // Go back to dashboard
-    app.update(Action::GoBack);
-    assert_eq!(app.view, View::Dashboard);
 }
 
 #[test]
@@ -241,6 +233,12 @@ fn test_app_quit() {
     let mut app = App::new();
 
     assert!(!app.should_quit);
+
+    // First quit shows warning
+    app.update(Action::Quit);
+    assert!(!app.should_quit);
+
+    // Second quit actually quits
     app.update(Action::Quit);
     assert!(app.should_quit);
 }

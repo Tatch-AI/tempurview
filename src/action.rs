@@ -1,5 +1,34 @@
 use crate::domain::{StatusCounts, WorkflowDetail, WorkflowStatus, WorkflowSummary};
 
+/// Table columns that can be toggled
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TableColumn {
+    Status,
+    Type,
+    WorkflowId,
+    Started,
+}
+
+impl TableColumn {
+    pub fn all() -> &'static [TableColumn] {
+        &[
+            TableColumn::Status,
+            TableColumn::Type,
+            TableColumn::WorkflowId,
+            TableColumn::Started,
+        ]
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            TableColumn::Status => "Status",
+            TableColumn::Type => "Type",
+            TableColumn::WorkflowId => "Workflow ID",
+            TableColumn::Started => "Started",
+        }
+    }
+}
+
 /// All possible user actions
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -12,19 +41,22 @@ pub enum Action {
     PageDown,
 
     // View switching
-    SwitchToList,
-    SwitchToDashboard,
     ViewDetail,
     GoBack,
 
     // Filtering
     SetStatusFilter(Option<WorkflowStatus>),
     SetTypeFilter(Option<String>),
+    NextStatusFilter,
+    PrevStatusFilter,
     ClearFilters,
     OpenFilterInput,
     CloseFilterInput,
     AppendFilterChar(char),
     DeleteFilterChar,
+
+    // Column visibility
+    ToggleColumn(TableColumn),
 
     // Data operations
     Refresh,
@@ -50,13 +82,14 @@ impl PartialEq for Action {
             (Action::NavigateBottom, Action::NavigateBottom) => true,
             (Action::PageUp, Action::PageUp) => true,
             (Action::PageDown, Action::PageDown) => true,
-            (Action::SwitchToList, Action::SwitchToList) => true,
-            (Action::SwitchToDashboard, Action::SwitchToDashboard) => true,
             (Action::ViewDetail, Action::ViewDetail) => true,
             (Action::GoBack, Action::GoBack) => true,
             (Action::SetStatusFilter(a), Action::SetStatusFilter(b)) => a == b,
             (Action::SetTypeFilter(a), Action::SetTypeFilter(b)) => a == b,
+            (Action::NextStatusFilter, Action::NextStatusFilter) => true,
+            (Action::PrevStatusFilter, Action::PrevStatusFilter) => true,
             (Action::ClearFilters, Action::ClearFilters) => true,
+            (Action::ToggleColumn(a), Action::ToggleColumn(b)) => a == b,
             (Action::OpenFilterInput, Action::OpenFilterInput) => true,
             (Action::CloseFilterInput, Action::CloseFilterInput) => true,
             (Action::AppendFilterChar(a), Action::AppendFilterChar(b)) => a == b,

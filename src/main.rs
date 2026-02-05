@@ -150,7 +150,11 @@ async fn main() -> color_eyre::Result<()> {
         // Handle events
         tokio::select! {
             Some(event) = events.next() => {
-                if let Some(action) = event_to_action(event, app.view, app.input_mode) {
+                debug!("Event received: {:?}", event);
+                debug!("Current state - view: {:?}, input_mode: {:?}", app.view, app.input_mode);
+                let action = event_to_action(event, app.view, app.input_mode);
+                debug!("Action mapped: {:?}", action);
+                if let Some(action) = action {
                     let effects = app.update(action);
                     handle_effects(effects, &cli_handle, &app, config.default_limit);
                 }
@@ -406,12 +410,12 @@ fn render(app: &App, frame: &mut Frame) {
 
     // Render main content based on view
     match app.view {
-        View::Dashboard | View::WorkflowList => {
-            let mut list_state = app.list_state.clone();
+        View::WorkflowList => {
+            let mut table_state = app.table_state.clone();
             frame.render_stateful_widget(
-                WorkflowListWidget::new(&app.workflows, &app.filter),
+                WorkflowListWidget::new(&app.workflows, &app.filter, &app.visible_columns),
                 layout[3],
-                &mut list_state,
+                &mut table_state,
             );
         }
         View::WorkflowDetail => {
@@ -437,8 +441,7 @@ fn render(app: &App, frame: &mut Frame) {
 
 fn render_title(app: &App, frame: &mut Frame, area: Rect) {
     let view_name = match app.view {
-        View::Dashboard => "Dashboard",
-        View::WorkflowList => "Workflow List",
+        View::WorkflowList => "Workflows",
         View::WorkflowDetail => "Workflow Detail",
     };
 
