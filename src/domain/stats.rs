@@ -1,6 +1,73 @@
 use super::{WorkflowStatus, WorkflowSummary};
 use std::collections::HashMap;
 
+/// Sort direction for table columns
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Ascending,
+    Descending,
+}
+
+impl SortDirection {
+    pub fn toggle(&self) -> Self {
+        match self {
+            SortDirection::Ascending => SortDirection::Descending,
+            SortDirection::Descending => SortDirection::Ascending,
+        }
+    }
+
+    pub fn indicator(&self) -> &'static str {
+        match self {
+            SortDirection::Ascending => "▲",
+            SortDirection::Descending => "▼",
+        }
+    }
+}
+
+/// Column identifiers for the TypeList view sort targets
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeListColumn {
+    TypeName,
+    Total,
+    StatusCount(WorkflowStatus),
+}
+
+/// Per-type workflow statistics with status breakdown
+#[derive(Debug, Clone)]
+pub struct TypeStat {
+    pub workflow_type: String,
+    pub total: u64,
+    pub by_status: HashMap<WorkflowStatus, u64>,
+}
+
+impl TypeStat {
+    pub fn from_workflows(workflows: &[WorkflowSummary]) -> Vec<TypeStat> {
+        let mut map: HashMap<String, HashMap<WorkflowStatus, u64>> = HashMap::new();
+        for wf in workflows {
+            let entry = map.entry(wf.workflow_type.clone()).or_default();
+            *entry.entry(wf.status).or_insert(0) += 1;
+        }
+        let mut stats: Vec<TypeStat> = map
+            .into_iter()
+            .map(|(workflow_type, by_status)| {
+                let total = by_status.values().sum();
+                TypeStat {
+                    workflow_type,
+                    total,
+                    by_status,
+                }
+            })
+            .collect();
+        // Default sort: total descending
+        stats.sort_by(|a, b| b.total.cmp(&a.total));
+        stats
+    }
+
+    pub fn get_status_count(&self, status: WorkflowStatus) -> u64 {
+        self.by_status.get(&status).copied().unwrap_or(0)
+    }
+}
+
 /// Aggregated workflow counts by status
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatusCounts {

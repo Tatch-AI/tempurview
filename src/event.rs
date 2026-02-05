@@ -80,6 +80,11 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
             KeyCode::Backspace => Some(Action::DeleteFilterChar),
             _ => None,
         },
+        InputMode::SortSelect => match key.code {
+            KeyCode::Esc => Some(Action::CloseSort),
+            KeyCode::Char(c) => Some(Action::SortBy(c as u8)),
+            _ => None,
+        },
         InputMode::Normal => {
             // Check for Ctrl+C first
             if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -101,8 +106,15 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::PageDown => Some(Action::PageDown),
                 KeyCode::Home => Some(Action::NavigateTop),
                 KeyCode::End => Some(Action::NavigateBottom),
+                KeyCode::Char('s') if view == View::WorkflowList || view == View::TypeList => {
+                    Some(Action::EnterSortMode)
+                }
+                KeyCode::Char('T') if view == View::WorkflowList => {
+                    Some(Action::ViewTypeList)
+                }
                 KeyCode::Enter => match view {
                     View::WorkflowList => Some(Action::ViewDetail),
+                    View::TypeList => Some(Action::ViewDetail),
                     View::WorkflowDetail => None,
                 },
                 KeyCode::Esc => Some(Action::GoBack),

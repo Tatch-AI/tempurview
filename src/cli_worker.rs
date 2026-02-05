@@ -5,7 +5,7 @@
 
 use crate::action::{Action, DataPayload};
 use crate::client::TemporalClient;
-use crate::domain::{StatusCounts, WorkflowFilter, WorkflowStatus};
+use crate::domain::{StatusCounts, TypeStat, WorkflowFilter, WorkflowStatus};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -37,6 +37,8 @@ pub enum CliRequest {
         run_id: Option<String>,
         reason: String,
     },
+    /// Load type statistics (fetches all workflows, groups by type)
+    LoadTypeStats { limit: u32 },
 }
 
 /// Worker that processes CLI requests sequentially
@@ -97,6 +99,7 @@ impl CliWorker {
                 run_id,
                 reason,
             } => self.terminate_workflow(workflow_id, run_id, reason).await,
+            CliRequest::LoadTypeStats { limit } => self.load_type_stats(limit).await,
         }
     }
 
@@ -157,6 +160,24 @@ impl CliWorker {
             }
             Err(e) => {
                 error!("Failed to load workflow detail for {}: {}", workflow_id, e);
+                let _ = self.action_tx.send(Action::Error(e.to_string()));
+            }
+        }
+    }
+
+    /// Load type statistics by fetching workflows and grouping by type
+    async fn load_type_stats(&self, limit: u32) {
+        debug!("Loading type stats with limit={}", limit);
+        match self.client.list(&WorkflowFilter::new(), limit).await {
+            Ok(workflows) => {
+                let stats = TypeStat::from_workflows(&workflows);
+                debug!("Computed {} type stats from {} workflows", stats.len(), workflows.len());
+                let _ = self
+                    .action_tx
+                    .send(Action::DataLoaded(DataPayload::TypeStats(stats)));
+            }
+            Err(e) => {
+                error!("Failed to load type stats: {}", e);
                 let _ = self.action_tx.send(Action::Error(e.to_string()));
             }
         }
@@ -235,6 +256,11 @@ impl CliHandle {
             workflow_id,
             run_id,
         });
+    }
+
+    /// Load type statistics
+    pub fn load_type_stats(&self, limit: u32) {
+        let _ = self.send(CliRequest::LoadTypeStats { limit });
     }
 
     /// Cancel a workflow

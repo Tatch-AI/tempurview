@@ -1,6 +1,6 @@
 use crate::action::TableColumn;
 use crate::app::LoadState;
-use crate::domain::{WorkflowFilter, WorkflowSummary};
+use crate::domain::{SortDirection, WorkflowFilter, WorkflowSummary};
 use chrono::{DateTime, Utc};
 use ratatui::{
     buffer::Buffer,
@@ -15,6 +15,7 @@ pub struct WorkflowTableWidget<'a> {
     workflows: &'a LoadState<Vec<WorkflowSummary>>,
     filter: &'a WorkflowFilter,
     visible_columns: &'a HashSet<TableColumn>,
+    sort: &'a Option<(TableColumn, SortDirection)>,
 }
 
 impl<'a> WorkflowTableWidget<'a> {
@@ -22,11 +23,13 @@ impl<'a> WorkflowTableWidget<'a> {
         workflows: &'a LoadState<Vec<WorkflowSummary>>,
         filter: &'a WorkflowFilter,
         visible_columns: &'a HashSet<TableColumn>,
+        sort: &'a Option<(TableColumn, SortDirection)>,
     ) -> Self {
         Self {
             workflows,
             filter,
             visible_columns,
+            sort,
         }
     }
 
@@ -39,20 +42,33 @@ impl<'a> WorkflowTableWidget<'a> {
         }
     }
 
+    fn sort_indicator_for(&self, col: TableColumn) -> &'static str {
+        if let Some((ref sort_col, ref dir)) = self.sort {
+            if *sort_col == col {
+                return dir.indicator();
+            }
+        }
+        ""
+    }
+
     fn build_header(&self) -> Row<'static> {
         let mut cells = Vec::new();
 
         if self.visible_columns.contains(&TableColumn::Status) {
-            cells.push(Cell::from("Status").style(Style::default().bold()));
+            let ind = self.sort_indicator_for(TableColumn::Status);
+            cells.push(Cell::from(format!("Status{}", ind)).style(Style::default().bold()));
         }
         if self.visible_columns.contains(&TableColumn::Type) {
-            cells.push(Cell::from("Type").style(Style::default().bold()));
+            let ind = self.sort_indicator_for(TableColumn::Type);
+            cells.push(Cell::from(format!("Type{}", ind)).style(Style::default().bold()));
         }
         if self.visible_columns.contains(&TableColumn::WorkflowId) {
-            cells.push(Cell::from("Workflow ID").style(Style::default().bold()));
+            let ind = self.sort_indicator_for(TableColumn::WorkflowId);
+            cells.push(Cell::from(format!("Workflow ID{}", ind)).style(Style::default().bold()));
         }
         if self.visible_columns.contains(&TableColumn::Started) {
-            cells.push(Cell::from("Started").style(Style::default().bold()));
+            let ind = self.sort_indicator_for(TableColumn::Started);
+            cells.push(Cell::from(format!("Started{}", ind)).style(Style::default().bold()));
         }
 
         Row::new(cells)

@@ -1,5 +1,8 @@
 use crate::action::{Action, DataPayload, TableColumn};
-use crate::domain::{StatusCounts, WorkflowDetail, WorkflowFilter, WorkflowStatus, WorkflowSummary};
+use crate::domain::{
+    SortDirection, StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter,
+    WorkflowStatus, WorkflowSummary,
+};
 use ratatui::widgets::TableState;
 use std::collections::HashSet;
 use std::time::Instant;
@@ -9,6 +12,7 @@ use std::time::Instant;
 pub enum View {
     WorkflowList,
     WorkflowDetail,
+    TypeList,
 }
 
 /// Input mode
@@ -16,6 +20,7 @@ pub enum View {
 pub enum InputMode {
     Normal,
     FilterInput,
+    SortSelect,
 }
 
 /// Loading state for async data
@@ -67,6 +72,14 @@ pub struct App {
     // Column visibility
     pub visible_columns: HashSet<TableColumn>,
 
+    // Sort state
+    pub workflow_sort: Option<(TableColumn, SortDirection)>,
+    pub type_sort: Option<(TypeListColumn, SortDirection)>,
+
+    // TypeList state
+    pub type_stats: LoadState<Vec<TypeStat>>,
+    pub type_table_state: TableState,
+
     // App control
     pub should_quit: bool,
     pub last_error: Option<String>,
@@ -105,6 +118,12 @@ impl App {
 
             table_state,
             visible_columns,
+
+            workflow_sort: None,
+            type_sort: None,
+
+            type_stats: LoadState::NotLoaded,
+            type_table_state: TableState::default().with_selected(0),
 
             should_quit: false,
             last_error: None,
@@ -153,25 +172,47 @@ impl App {
                 vec![]
             }
             Action::ViewDetail => {
-                if let Some(wf_id) = self.selected_workflow_id() {
-                    let id = wf_id.to_string();
-                    self.view_stack.push(self.view);
-                    self.view = View::WorkflowDetail;
-                    self.selected_workflow = Some(LoadState::Loading);
-                    vec![Effect::LoadWorkflowDetail(id)]
-                } else {
-                    vec![]
+                match self.view {
+                    View::TypeList => {
+                        // Select type → filter WorkflowList by that type
+                        if let Some(type_name) = self.selected_type_name() {
+                            let name = type_name.to_string();
+                            // Pop back to wherever we came from (should be WorkflowList)
+                            if let Some(prev_view) = self.view_stack.pop() {
+                                self.view = prev_view;
+                            } else {
+                                self.view = View::WorkflowList;
+                            }
+                            self.filter.workflow_type = Some(name);
+                            self.table_state.select(Some(0));
+                            vec![Effect::LoadWorkflows]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    _ => {
+                        if let Some(wf_id) = self.selected_workflow_id() {
+                            let id = wf_id.to_string();
+                            self.view_stack.push(self.view);
+                            self.view = View::WorkflowDetail;
+                            self.selected_workflow = Some(LoadState::Loading);
+                            vec![Effect::LoadWorkflowDetail(id)]
+                        } else {
+                            vec![]
+                        }
+                    }
                 }
             }
             Action::GoBack => {
-                if self.input_mode == InputMode::FilterInput {
+                if self.input_mode == InputMode::SortSelect {
+                    self.input_mode = InputMode::Normal;
+                } else if self.input_mode == InputMode::FilterInput {
                     self.input_mode = InputMode::Normal;
                     self.filter_input.clear();
                 } else if let Some(prev_view) = self.view_stack.pop() {
                     self.view = prev_view;
                     self.selected_workflow = None;
                 } else if self.view == View::WorkflowDetail {
-                    // Go back to list from detail
                     self.view = View::WorkflowList;
                     self.selected_workflow = None;
                 }
@@ -292,6 +333,82 @@ impl App {
                     vec![]
                 }
             }
+            Action::ViewTypeList => {
+                self.view_stack.push(self.view);
+                self.view = View::TypeList;
+                self.type_stats = LoadState::Loading;
+                self.type_table_state.select(Some(0));
+                vec![Effect::LoadTypeStats]
+            }
+            Action::EnterSortMode => {
+                self.input_mode = InputMode::SortSelect;
+                vec![]
+            }
+            Action::CloseSort => {
+                self.input_mode = InputMode::Normal;
+                vec![]
+            }
+            Action::SortBy(key) => {
+                self.input_mode = InputMode::Normal;
+                match self.view {
+                    View::WorkflowList => {
+                        let column = match key {
+                            b's' => Some(TableColumn::Status),
+                            b't' => Some(TableColumn::Type),
+                            b'w' => Some(TableColumn::WorkflowId),
+                            b'd' => Some(TableColumn::Started),
+                            _ => None,
+                        };
+                        if let Some(col) = column {
+                            let direction = if let Some((ref current_col, ref dir)) =
+                                self.workflow_sort
+                            {
+                                if *current_col == col {
+                                    dir.toggle()
+                                } else {
+                                    SortDirection::Ascending
+                                }
+                            } else {
+                                SortDirection::Ascending
+                            };
+                            self.workflow_sort = Some((col, direction));
+                            self.sort_workflows();
+                        }
+                    }
+                    View::TypeList => {
+                        let column = match key {
+                            b't' => Some(TypeListColumn::TypeName),
+                            b'n' => Some(TypeListColumn::Total),
+                            b'1' => Some(TypeListColumn::StatusCount(WorkflowStatus::Running)),
+                            b'2' => Some(TypeListColumn::StatusCount(WorkflowStatus::Completed)),
+                            b'3' => Some(TypeListColumn::StatusCount(WorkflowStatus::Failed)),
+                            b'4' => Some(TypeListColumn::StatusCount(WorkflowStatus::Canceled)),
+                            b'5' => Some(TypeListColumn::StatusCount(WorkflowStatus::Terminated)),
+                            b'6' => Some(TypeListColumn::StatusCount(WorkflowStatus::TimedOut)),
+                            b'7' => {
+                                Some(TypeListColumn::StatusCount(WorkflowStatus::ContinuedAsNew))
+                            }
+                            _ => None,
+                        };
+                        if let Some(col) = column {
+                            let direction =
+                                if let Some((ref current_col, ref dir)) = self.type_sort {
+                                    if *current_col == col {
+                                        dir.toggle()
+                                    } else {
+                                        SortDirection::Descending
+                                    }
+                                } else {
+                                    SortDirection::Descending
+                                };
+                            self.type_sort = Some((col, direction));
+                            self.sort_type_stats();
+                        }
+                    }
+                    _ => {}
+                }
+                vec![]
+            }
             Action::Quit => {
                 let now = Instant::now();
                 if let Some(last_attempt) = self.last_quit_attempt {
@@ -332,6 +449,7 @@ impl App {
                         }
 
                         self.workflows = LoadState::Loaded(wfs);
+                        self.sort_workflows();
                         // Reset selection if it's out of bounds
                         if let LoadState::Loaded(ref workflows) = self.workflows {
                             let selected = self.table_state.selected().unwrap_or(0);
@@ -342,6 +460,17 @@ impl App {
                     }
                     DataPayload::Detail(detail) => {
                         self.selected_workflow = Some(LoadState::Loaded(*detail));
+                    }
+                    DataPayload::TypeStats(stats) => {
+                        self.type_stats = LoadState::Loaded(stats);
+                        self.sort_type_stats();
+                        // Reset selection if out of bounds
+                        if let LoadState::Loaded(ref ts) = self.type_stats {
+                            let selected = self.type_table_state.selected().unwrap_or(0);
+                            if selected >= ts.len() && !ts.is_empty() {
+                                self.type_table_state.select(Some(ts.len() - 1));
+                            }
+                        }
                     }
                 }
                 vec![]
@@ -401,16 +530,28 @@ impl App {
     }
 
     fn current_table_state_mut(&mut self) -> &mut TableState {
-        // Always navigate the workflow table with j/k
-        &mut self.table_state
+        match self.view {
+            View::TypeList => &mut self.type_table_state,
+            _ => &mut self.table_state,
+        }
     }
 
     fn current_list_len(&self) -> usize {
-        // Always use workflow list length for navigation
-        if let LoadState::Loaded(ref workflows) = self.workflows {
-            workflows.len()
-        } else {
-            0
+        match self.view {
+            View::TypeList => {
+                if let LoadState::Loaded(ref stats) = self.type_stats {
+                    stats.len()
+                } else {
+                    0
+                }
+            }
+            _ => {
+                if let LoadState::Loaded(ref workflows) = self.workflows {
+                    workflows.len()
+                } else {
+                    0
+                }
+            }
         }
     }
 
@@ -420,6 +561,94 @@ impl App {
             workflows.get(selected).map(|wf| wf.workflow_id.as_str())
         } else {
             None
+        }
+    }
+
+    pub fn selected_type_name(&self) -> Option<&str> {
+        if let LoadState::Loaded(ref stats) = self.type_stats {
+            let selected = self.type_table_state.selected().unwrap_or(0);
+            stats.get(selected).map(|ts| ts.workflow_type.as_str())
+        } else {
+            None
+        }
+    }
+
+    fn sort_workflows(&mut self) {
+        if let (Some((col, dir)), LoadState::Loaded(ref mut workflows)) =
+            (&self.workflow_sort, &mut self.workflows)
+        {
+            let dir = *dir;
+            match col {
+                TableColumn::Status => workflows.sort_by(|a, b| {
+                    let cmp = a.status.short_name().cmp(&b.status.short_name());
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+                TableColumn::Type => workflows.sort_by(|a, b| {
+                    let cmp = a.workflow_type.cmp(&b.workflow_type);
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+                TableColumn::WorkflowId => workflows.sort_by(|a, b| {
+                    let cmp = a.workflow_id.cmp(&b.workflow_id);
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+                TableColumn::Started => workflows.sort_by(|a, b| {
+                    let cmp = a.start_time.cmp(&b.start_time);
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+            }
+        }
+    }
+
+    fn sort_type_stats(&mut self) {
+        if let (Some((col, dir)), LoadState::Loaded(ref mut stats)) =
+            (&self.type_sort, &mut self.type_stats)
+        {
+            let dir = *dir;
+            match col {
+                TypeListColumn::TypeName => stats.sort_by(|a, b| {
+                    let cmp = a.workflow_type.cmp(&b.workflow_type);
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+                TypeListColumn::Total => stats.sort_by(|a, b| {
+                    let cmp = a.total.cmp(&b.total);
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+                TypeListColumn::StatusCount(status) => {
+                    let status = *status;
+                    stats.sort_by(|a, b| {
+                        let cmp = a.get_status_count(status).cmp(&b.get_status_count(status));
+                        if dir == SortDirection::Descending {
+                            cmp.reverse()
+                        } else {
+                            cmp
+                        }
+                    });
+                }
+            }
         }
     }
 
@@ -439,6 +668,7 @@ pub enum Effect {
     LoadCounts,
     LoadWorkflows,
     LoadWorkflowDetail(String),
+    LoadTypeStats,
     CancelWorkflow(String),
     TerminateWorkflow(String),
 }

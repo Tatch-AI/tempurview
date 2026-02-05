@@ -16,14 +16,34 @@ impl HelpBar {
     pub fn for_view(view: View, input_mode: InputMode) -> Self {
         let shortcuts = match (view, input_mode) {
             (_, InputMode::FilterInput) => vec![("Enter", "Apply"), ("Esc", "Cancel")],
+            (View::WorkflowList, InputMode::SortSelect) => vec![
+                ("s", "Status"),
+                ("t", "Type"),
+                ("w", "Workflow ID"),
+                ("d", "Date"),
+                ("Esc", "Cancel"),
+            ],
+            (View::TypeList, InputMode::SortSelect) => vec![
+                ("t", "Type"),
+                ("n", "Total"),
+                ("1-7", "Status col"),
+                ("Esc", "Cancel"),
+            ],
             (View::WorkflowList, _) => vec![
                 ("j/k", "Navigate"),
                 ("Enter", "Details"),
+                ("s", "Sort"),
+                ("T", "Types"),
                 ("/", "Filter"),
                 ("1-5", "Status"),
-                ("[/]", "Cycle"),
-                ("F1-4", "Columns"),
                 ("r", "Refresh"),
+                ("?", "Help"),
+            ],
+            (View::TypeList, _) => vec![
+                ("j/k", "Navigate"),
+                ("Enter", "Select"),
+                ("s", "Sort"),
+                ("Esc", "Back"),
                 ("?", "Help"),
             ],
             (View::WorkflowDetail, _) => vec![
@@ -85,6 +105,12 @@ Navigation:
 Views:
   Enter       Select / View details
   Esc         Go back
+  T           Workflow Types view
+
+Sorting:
+  s           Enter sort mode
+    then: s/t/w/d (WorkflowList)
+    then: t/n/1-7 (TypeList)
 
 Filtering:
   /           Open filter input

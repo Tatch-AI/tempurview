@@ -11,7 +11,8 @@ use tempurview::event::{event_to_action, EventHandler};
 use tempurview::logging;
 use tempurview::tui::Tui;
 use tempurview::widgets::{
-    FilterInput, HelpBar, HelpOverlay, StatusDashboard, WorkflowDetailWidget, WorkflowListWidget,
+    FilterInput, HelpBar, HelpOverlay, StatusDashboard, TypeListWidget, WorkflowDetailWidget,
+    WorkflowListWidget,
 };
 
 use ratatui::{
@@ -424,7 +425,20 @@ fn render(app: &App, frame: &mut Frame) {
         View::WorkflowList => {
             let mut table_state = app.table_state.clone();
             frame.render_stateful_widget(
-                WorkflowListWidget::new(&app.workflows, &app.filter, &app.visible_columns),
+                WorkflowListWidget::new(
+                    &app.workflows,
+                    &app.filter,
+                    &app.visible_columns,
+                    &app.workflow_sort,
+                ),
+                layout[3],
+                &mut table_state,
+            );
+        }
+        View::TypeList => {
+            let mut table_state = app.type_table_state.clone();
+            frame.render_stateful_widget(
+                TypeListWidget::new(&app.type_stats, &app.type_sort),
                 layout[3],
                 &mut table_state,
             );
@@ -453,6 +467,7 @@ fn render(app: &App, frame: &mut Frame) {
 fn render_title(app: &App, frame: &mut Frame, area: Rect) {
     let view_name = match app.view {
         View::WorkflowList => "Workflows",
+        View::TypeList => "Workflow Types",
         View::WorkflowDetail => "Workflow Detail",
     };
 
@@ -504,6 +519,9 @@ fn handle_effects(effects: Vec<Effect>, cli_handle: &CliHandle, app: &App, defau
             }
             Effect::LoadWorkflows => {
                 cli_handle.load_workflows(app.filter.clone(), default_limit);
+            }
+            Effect::LoadTypeStats => {
+                cli_handle.load_type_stats(500);
             }
             Effect::LoadWorkflowDetail(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());

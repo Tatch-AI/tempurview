@@ -1,4 +1,4 @@
-use crate::domain::{StatusCounts, WorkflowDetail, WorkflowStatus, WorkflowSummary};
+use crate::domain::{StatusCounts, TypeStat, WorkflowDetail, WorkflowStatus, WorkflowSummary};
 
 /// Table columns that can be toggled
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,6 +42,7 @@ pub enum Action {
 
     // View switching
     ViewDetail,
+    ViewTypeList,
     GoBack,
 
     // Filtering
@@ -57,6 +58,11 @@ pub enum Action {
 
     // Column visibility
     ToggleColumn(TableColumn),
+
+    // Sorting
+    EnterSortMode,
+    SortBy(u8),
+    CloseSort,
 
     // Data operations
     Refresh,
@@ -83,6 +89,7 @@ impl PartialEq for Action {
             (Action::PageUp, Action::PageUp) => true,
             (Action::PageDown, Action::PageDown) => true,
             (Action::ViewDetail, Action::ViewDetail) => true,
+            (Action::ViewTypeList, Action::ViewTypeList) => true,
             (Action::GoBack, Action::GoBack) => true,
             (Action::SetStatusFilter(a), Action::SetStatusFilter(b)) => a == b,
             (Action::SetTypeFilter(a), Action::SetTypeFilter(b)) => a == b,
@@ -90,6 +97,9 @@ impl PartialEq for Action {
             (Action::PrevStatusFilter, Action::PrevStatusFilter) => true,
             (Action::ClearFilters, Action::ClearFilters) => true,
             (Action::ToggleColumn(a), Action::ToggleColumn(b)) => a == b,
+            (Action::EnterSortMode, Action::EnterSortMode) => true,
+            (Action::SortBy(a), Action::SortBy(b)) => a == b,
+            (Action::CloseSort, Action::CloseSort) => true,
             (Action::OpenFilterInput, Action::OpenFilterInput) => true,
             (Action::CloseFilterInput, Action::CloseFilterInput) => true,
             (Action::AppendFilterChar(a), Action::AppendFilterChar(b)) => a == b,
@@ -114,4 +124,5 @@ pub enum DataPayload {
     Counts(StatusCounts),
     Workflows(Vec<WorkflowSummary>),
     Detail(Box<WorkflowDetail>),
+    TypeStats(Vec<TypeStat>),
 }
