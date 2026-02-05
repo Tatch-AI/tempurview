@@ -260,11 +260,11 @@ impl App {
                 vec![]
             }
             Action::Refresh => {
-                // Counts are now computed locally from workflows, so only load workflows
+                // Load both counts (from API) and workflows (filtered)
                 self.status_counts = LoadState::Loading;
                 self.workflows = LoadState::Loading;
                 self.last_refresh = Some(Instant::now());
-                vec![Effect::LoadWorkflows]
+                vec![Effect::LoadCounts, Effect::LoadWorkflows]
             }
             Action::CancelWorkflow(id) => {
                 let workflow_id = if id.is_empty() {
@@ -324,9 +324,12 @@ impl App {
                         self.status_counts = LoadState::Loaded(counts);
                     }
                     DataPayload::Workflows(wfs) => {
-                        // Compute counts locally from the workflow list (avoids 7 API calls)
-                        let counts = StatusCounts::from_workflows(&wfs);
-                        self.status_counts = LoadState::Loaded(counts);
+                        // Only compute counts locally if we don't have API-loaded counts
+                        // API counts are more accurate as they include ALL workflows
+                        if !self.status_counts.is_loaded() {
+                            let counts = StatusCounts::from_workflows(&wfs);
+                            self.status_counts = LoadState::Loaded(counts);
+                        }
 
                         self.workflows = LoadState::Loaded(wfs);
                         // Reset selection if it's out of bounds
@@ -513,8 +516,9 @@ mod tests {
 
         assert!(matches!(app.status_counts, LoadState::Loading));
         assert!(matches!(app.workflows, LoadState::Loading));
-        // Counts are computed locally from workflows, so only LoadWorkflows is triggered
-        assert!(!effects.contains(&Effect::LoadCounts));
+        // LoadCounts loads counts for all statuses from API
+        // LoadWorkflows loads the filtered workflow list
+        assert!(effects.contains(&Effect::LoadCounts));
         assert!(effects.contains(&Effect::LoadWorkflows));
     }
 

@@ -5,7 +5,7 @@
 
 use crate::action::{Action, DataPayload};
 use crate::client::TemporalClient;
-use crate::domain::WorkflowFilter;
+use crate::domain::{StatusCounts, WorkflowFilter, WorkflowStatus};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -100,22 +100,28 @@ impl CliWorker {
         }
     }
 
-    /// Load workflow counts - now just fetches total count (1 API call instead of 7)
-    /// Individual status counts are computed locally from the workflow list
+    /// Load workflow counts for all statuses via count() API
     async fn load_counts(&self) {
-        debug!("Loading total workflow count");
-        match self.client.count(None).await {
-            Ok(total) => {
-                debug!("Total workflows: {}", total);
-                // We don't send counts here anymore - they're computed from workflows
-                // This is just a connectivity check / total count fetch
-                // The actual counts by status come from the workflow list
-            }
-            Err(e) => {
-                error!("Failed to load workflow count: {}", e);
-                let _ = self.action_tx.send(Action::Error(e.to_string()));
+        debug!("Loading workflow counts for all statuses");
+        let mut counts = StatusCounts::new();
+
+        for status in WorkflowStatus::all() {
+            let query = format!("ExecutionStatus='{}'", status.as_query_value());
+            match self.client.count(Some(&query)).await {
+                Ok(count) => {
+                    debug!("Status {:?}: {} workflows", status, count);
+                    counts.set(*status, count);
+                }
+                Err(e) => {
+                    error!("Failed to load count for status {:?}: {}", status, e);
+                    // Continue with other statuses, don't fail completely
+                }
             }
         }
+
+        let _ = self
+            .action_tx
+            .send(Action::DataLoaded(DataPayload::Counts(counts)));
     }
 
     /// Load workflows matching a filter
@@ -279,8 +285,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cli_worker_load_counts() {
-        // LoadCounts now just does a connectivity check - counts are computed locally
-        // from the workflow list, so this test verifies no error is sent
+        // LoadCounts queries count for each status and returns StatusCounts
         let client = Arc::new(MockTemporalClient::with_random_data(10));
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         let (action_tx, mut action_rx) = mpsc::unbounded_channel();
@@ -291,14 +296,14 @@ mod tests {
         let cli_handle = CliHandle::new(request_tx);
         cli_handle.load_counts();
 
-        // LoadCounts no longer sends a result (counts computed from workflows)
-        // Just verify it doesn't error - use a short timeout
-        let result = timeout(Duration::from_millis(100), action_rx.recv()).await;
-        // Should timeout (no action sent) or receive no error
-        match result {
-            Ok(Some(Action::Error(_))) => panic!("Should not error"),
-            _ => {} // Either timeout or no message is fine
-        }
+        // Should receive counts for all statuses
+        let result = timeout(Duration::from_secs(5), action_rx.recv()).await;
+        assert!(result.is_ok());
+        let action = result.unwrap();
+        assert!(matches!(
+            action,
+            Some(Action::DataLoaded(DataPayload::Counts(_)))
+        ));
     }
 
     #[tokio::test]

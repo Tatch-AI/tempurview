@@ -139,7 +139,8 @@ async fn main() -> color_eyre::Result<()> {
     let _worker_handle = cli_worker.spawn();
     let cli_handle = CliHandle::new(request_tx);
 
-    // Initial data load - just workflows (lazy loading: counts loaded on first refresh 'r')
+    // Initial data load - load both counts and workflows
+    cli_handle.load_counts();
     cli_handle.load_workflows(app.filter.clone(), config.default_limit);
 
     // Main loop

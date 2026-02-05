@@ -108,8 +108,8 @@ fn test_app_refresh_triggers_loading() {
 
     assert!(matches!(app.status_counts, LoadState::Loading));
     assert!(matches!(app.workflows, LoadState::Loading));
-    // Counts are now computed locally from workflows, so LoadCounts is not triggered
-    assert!(!effects
+    // LoadCounts queries count for all statuses from API
+    assert!(effects
         .iter()
         .any(|e| matches!(e, tempurview::Effect::LoadCounts)));
     assert!(effects
@@ -146,31 +146,31 @@ fn test_app_navigation_with_workflows() {
     ]);
 
     // Start at first item
-    assert_eq!(app.list_state.selected(), Some(0));
+    assert_eq!(app.table_state.selected(), Some(0));
 
     // Navigate down
     app.update(Action::NavigateDown);
-    assert_eq!(app.list_state.selected(), Some(1));
+    assert_eq!(app.table_state.selected(), Some(1));
 
     // Navigate down again
     app.update(Action::NavigateDown);
-    assert_eq!(app.list_state.selected(), Some(2));
+    assert_eq!(app.table_state.selected(), Some(2));
 
     // Navigate down at bottom (should stay at 2)
     app.update(Action::NavigateDown);
-    assert_eq!(app.list_state.selected(), Some(2));
+    assert_eq!(app.table_state.selected(), Some(2));
 
     // Navigate up
     app.update(Action::NavigateUp);
-    assert_eq!(app.list_state.selected(), Some(1));
+    assert_eq!(app.table_state.selected(), Some(1));
 
     // Jump to bottom
     app.update(Action::NavigateBottom);
-    assert_eq!(app.list_state.selected(), Some(2));
+    assert_eq!(app.table_state.selected(), Some(2));
 
     // Jump to top
     app.update(Action::NavigateTop);
-    assert_eq!(app.list_state.selected(), Some(0));
+    assert_eq!(app.table_state.selected(), Some(0));
 }
 
 #[test]
