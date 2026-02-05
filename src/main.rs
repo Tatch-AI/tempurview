@@ -136,6 +136,7 @@ async fn main() -> color_eyre::Result<()> {
 
     // Create app state
     let mut app = App::new();
+    app.temporal_namespace = config.temporal_namespace.clone();
 
     // Create event handler
     let mut events = EventHandler::new(config.tick_rate);
@@ -167,12 +168,12 @@ async fn main() -> color_eyre::Result<()> {
                 debug!("Action mapped: {:?}", action);
                 if let Some(action) = action {
                     let effects = app.update(action);
-                    handle_effects(effects, &cli_handle, &app, config.default_limit);
+                    handle_effects(effects, &cli_handle, &app, config.default_limit, &action_tx);
                 }
             }
             Some(action) = action_rx.recv() => {
                 let effects = app.update(action);
-                handle_effects(effects, &cli_handle, &app, config.default_limit);
+                handle_effects(effects, &cli_handle, &app, config.default_limit, &action_tx);
             }
         }
 
@@ -524,7 +525,13 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     frame.render_widget(HelpOverlay, help_area);
 }
 
-fn handle_effects(effects: Vec<Effect>, cli_handle: &CliHandle, app: &App, default_limit: u32) {
+fn handle_effects(
+    effects: Vec<Effect>,
+    cli_handle: &CliHandle,
+    app: &App,
+    default_limit: u32,
+    action_tx: &mpsc::UnboundedSender<Action>,
+) {
     for effect in effects {
         match effect {
             Effect::LoadCounts => {
@@ -558,6 +565,82 @@ fn handle_effects(effects: Vec<Effect>, cli_handle: &CliHandle, app: &App, defau
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());
                 cli_handle.terminate_workflow(id, run_id, "Terminated via TUI".to_string());
             }
+            Effect::CopyToClipboard(text) => {
+                copy_to_clipboard(&text, action_tx);
+            }
+            Effect::OpenInBrowser(url) => {
+                open_in_browser(&url, action_tx);
+            }
+        }
+    }
+}
+
+fn copy_to_clipboard(text: &str, action_tx: &mpsc::UnboundedSender<Action>) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let result = if cfg!(target_os = "macos") {
+        Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(text.as_bytes())?;
+                }
+                child.wait()
+            })
+    } else if cfg!(target_os = "linux") {
+        Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(text.as_bytes())?;
+                }
+                child.wait()
+            })
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Clipboard not supported on this platform",
+        ))
+    };
+
+    match result {
+        Ok(_) => {
+            info!("Copied URL to clipboard: {}", text);
+            let _ = action_tx.send(Action::Error("URL copied to clipboard".to_string()));
+        }
+        Err(e) => {
+            error!("Failed to copy to clipboard: {}", e);
+            let _ = action_tx.send(Action::Error(format!("Failed to copy: {}", e)));
+        }
+    }
+}
+
+fn open_in_browser(url: &str, action_tx: &mpsc::UnboundedSender<Action>) {
+    use std::process::Command;
+
+    let result = if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).spawn()
+    } else if cfg!(target_os = "linux") {
+        Command::new("xdg-open").arg(url).spawn()
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Browser open not supported on this platform",
+        ))
+    };
+
+    match result {
+        Ok(_) => {
+            info!("Opening URL in browser: {}", url);
+            let _ = action_tx.send(Action::Error("Opening in browser...".to_string()));
+        }
+        Err(e) => {
+            error!("Failed to open browser: {}", e);
+            let _ = action_tx.send(Action::Error(format!("Failed to open browser: {}", e)));
         }
     }
 }

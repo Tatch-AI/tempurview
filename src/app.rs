@@ -23,6 +23,8 @@ pub enum InputMode {
     SortSelect,
     DateRangeSelect,
     DateRangeCustom,
+    /// Waiting for second key after 'g' press (vim-style chord)
+    PendingG,
 }
 
 /// Loading state for async data
@@ -85,6 +87,9 @@ pub struct App {
     pub type_stats: LoadState<Vec<TypeStat>>,
     pub type_table_state: TableState,
 
+    // Config
+    pub temporal_namespace: String,
+
     // App control
     pub should_quit: bool,
     pub last_error: Option<String>,
@@ -133,6 +138,8 @@ impl App {
             type_stats: LoadState::NotLoaded,
             type_table_state: TableState::default().with_selected(0),
 
+            temporal_namespace: String::new(),
+
             should_quit: false,
             last_error: None,
             last_refresh: None,
@@ -148,6 +155,13 @@ impl App {
         // Clear last error on any action (except Error, Tick, and Quit which sets its own message)
         if !matches!(action, Action::Error(_) | Action::Tick | Action::Quit) {
             self.last_error = None;
+        }
+
+        // Reset PendingG mode on any action dispatched from it (except EnterPendingG itself)
+        if self.input_mode == InputMode::PendingG
+            && !matches!(action, Action::EnterPendingG | Action::Tick)
+        {
+            self.input_mode = InputMode::Normal;
         }
 
         match action {
@@ -212,7 +226,9 @@ impl App {
                 }
             }
             Action::GoBack => {
-                if self.input_mode == InputMode::DateRangeSelect {
+                if self.input_mode == InputMode::PendingG {
+                    self.input_mode = InputMode::Normal;
+                } else if self.input_mode == InputMode::DateRangeSelect {
                     self.input_mode = InputMode::Normal;
                 } else if self.input_mode == InputMode::DateRangeCustom {
                     self.input_mode = InputMode::Normal;
@@ -326,6 +342,30 @@ impl App {
             Action::DeleteFilterChar => {
                 self.filter_input.pop();
                 vec![]
+            }
+            Action::EnterPendingG => {
+                self.input_mode = InputMode::PendingG;
+                vec![]
+            }
+            Action::CancelPendingG => {
+                self.input_mode = InputMode::Normal;
+                vec![]
+            }
+            Action::CopyWorkflowUrl => {
+                if let Some(url) = self.workflow_url() {
+                    vec![Effect::CopyToClipboard(url)]
+                } else {
+                    self.last_error = Some("No workflow loaded".to_string());
+                    vec![]
+                }
+            }
+            Action::OpenWorkflowUrl => {
+                if let Some(url) = self.workflow_url() {
+                    vec![Effect::OpenInBrowser(url)]
+                } else {
+                    self.last_error = Some("No workflow loaded".to_string());
+                    vec![]
+                }
             }
             Action::Refresh => {
                 self.last_refresh = Some(Instant::now());
@@ -584,6 +624,20 @@ impl App {
         }
     }
 
+    /// Build a Temporal Cloud URL for the currently viewed workflow
+    pub fn workflow_url(&self) -> Option<String> {
+        if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
+            Some(format!(
+                "https://cloud.temporal.io/namespaces/{}/workflows/{}/{}/history",
+                self.temporal_namespace,
+                detail.summary.workflow_id,
+                detail.summary.run_id,
+            ))
+        } else {
+            None
+        }
+    }
+
     /// Return the appropriate reload effects based on the current view
     fn date_range_reload_effects(&self) -> Vec<Effect> {
         if self.view == View::TypeList {
@@ -772,6 +826,8 @@ pub enum Effect {
     LoadTypeStats,
     CancelWorkflow(String),
     TerminateWorkflow(String),
+    CopyToClipboard(String),
+    OpenInBrowser(String),
 }
 
 #[cfg(test)]

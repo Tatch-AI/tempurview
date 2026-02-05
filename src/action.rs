@@ -77,6 +77,14 @@ pub enum Action {
     ApplyCustomDateRange,
     CancelCustomDateRange,
 
+    // URL actions
+    CopyWorkflowUrl,
+    OpenWorkflowUrl,
+
+    // Multi-key chord
+    EnterPendingG,
+    CancelPendingG,
+
     // Data operations
     Refresh,
     CancelWorkflow(String),
@@ -126,6 +134,10 @@ impl PartialEq for Action {
             (Action::DeleteDateRangeChar, Action::DeleteDateRangeChar) => true,
             (Action::ApplyCustomDateRange, Action::ApplyCustomDateRange) => true,
             (Action::CancelCustomDateRange, Action::CancelCustomDateRange) => true,
+            (Action::CopyWorkflowUrl, Action::CopyWorkflowUrl) => true,
+            (Action::OpenWorkflowUrl, Action::OpenWorkflowUrl) => true,
+            (Action::EnterPendingG, Action::EnterPendingG) => true,
+            (Action::CancelPendingG, Action::CancelPendingG) => true,
             (Action::Refresh, Action::Refresh) => true,
             (Action::CancelWorkflow(a), Action::CancelWorkflow(b)) => a == b,
             (Action::TerminateWorkflow(a), Action::TerminateWorkflow(b)) => a == b,

@@ -65,6 +65,8 @@ impl HelpBar {
             ],
             (View::WorkflowDetail, _) => vec![
                 ("Esc", "Back"),
+                ("x", "Copy URL"),
+                ("gx", "Open URL"),
                 ("c", "Cancel"),
                 ("t", "Terminate"),
                 ("r", "Refresh"),
@@ -156,6 +158,8 @@ Column Visibility:
 
 Actions:
   r           Refresh data
+  x           Copy workflow URL (detail view)
+  gx          Open workflow in browser (detail)
   c           Cancel workflow (detail view)
   t           Terminate workflow (detail view)
 

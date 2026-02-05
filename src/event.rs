@@ -107,6 +107,12 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
             KeyCode::Backspace => Some(Action::DeleteDateRangeChar),
             _ => None,
         },
+        InputMode::PendingG => match key.code {
+            KeyCode::Char('g') => Some(Action::NavigateTop),
+            KeyCode::Char('x') if view == View::WorkflowDetail => Some(Action::OpenWorkflowUrl),
+            KeyCode::Esc => Some(Action::CancelPendingG),
+            _ => Some(Action::CancelPendingG),
+        },
         InputMode::Normal => {
             // Check for Ctrl+C first
             if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -119,7 +125,7 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('q') => Some(Action::Quit),
                 KeyCode::Char('j') | KeyCode::Down => Some(Action::NavigateDown),
                 KeyCode::Char('k') | KeyCode::Up => Some(Action::NavigateUp),
-                KeyCode::Char('g') => Some(Action::NavigateTop),
+                KeyCode::Char('g') => Some(Action::EnterPendingG),
                 KeyCode::Char('G') => Some(Action::NavigateBottom),
                 KeyCode::Char('/') => Some(Action::OpenFilterInput),
                 KeyCode::Char('r') => Some(Action::Refresh),
@@ -182,6 +188,9 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 }
                 KeyCode::Char('t') if view == View::WorkflowDetail => {
                     Some(Action::TerminateWorkflow(String::new())) // ID filled in by app
+                }
+                KeyCode::Char('x') if view == View::WorkflowDetail => {
+                    Some(Action::CopyWorkflowUrl)
                 }
                 _ => None,
             }
