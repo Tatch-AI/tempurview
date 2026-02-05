@@ -1,3 +1,6 @@
+/// Version from git tag at build time, falls back to Cargo.toml version
+const VERSION: &str = env!("GIT_VERSION");
+
 use tempurview::action::Action;
 use tempurview::app::{App, Effect, InputMode, View};
 use tempurview::cli_worker::{CliHandle, CliRequest, CliWorker};
@@ -46,6 +49,12 @@ async fn main() -> color_eyre::Result<()> {
 
     // Parse configuration
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Check for version flag
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("tempurview {}", VERSION);
+        return Ok(());
+    }
 
     // Check for help flag
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -175,7 +184,7 @@ async fn main() -> color_eyre::Result<()> {
 }
 
 fn print_help() {
-    println!("Tempurview - A terminal interface for Temporal workflows");
+    println!("Tempurview {} - A terminal interface for Temporal workflows", VERSION);
     println!();
     println!("USAGE:");
     println!("    tempurview [OPTIONS]");
@@ -189,6 +198,7 @@ fn print_help() {
     println!("    --test-connection   Test connection to Temporal and exit");
     println!("    --logs              Show log file location and recent errors");
     println!("    -h, --help          Show this help message");
+    println!("    -V, --version       Show version information");
     println!();
     println!("ENVIRONMENT VARIABLES:");
     println!("    TEMPORAL_ADDRESS    Temporal server address (e.g., localhost:7233)");
