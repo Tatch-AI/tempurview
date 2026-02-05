@@ -128,7 +128,9 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::PageDown => Some(Action::PageDown),
                 KeyCode::Home => Some(Action::NavigateTop),
                 KeyCode::End => Some(Action::NavigateBottom),
-                KeyCode::Char('d') if view == View::WorkflowList => {
+                KeyCode::Char('d')
+                    if view == View::WorkflowList || view == View::TypeList =>
+                {
                     Some(Action::EnterDateRangeMode)
                 }
                 KeyCode::Char('s') if view == View::WorkflowList || view == View::TypeList => {

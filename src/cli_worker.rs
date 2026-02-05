@@ -37,8 +37,11 @@ pub enum CliRequest {
         run_id: Option<String>,
         reason: String,
     },
-    /// Load type statistics (fetches all workflows, groups by type)
-    LoadTypeStats { limit: u32 },
+    /// Load type statistics (fetches workflows with filter, groups by type)
+    LoadTypeStats {
+        filter: WorkflowFilter,
+        limit: u32,
+    },
 }
 
 /// Worker that processes CLI requests sequentially
@@ -99,7 +102,9 @@ impl CliWorker {
                 run_id,
                 reason,
             } => self.terminate_workflow(workflow_id, run_id, reason).await,
-            CliRequest::LoadTypeStats { limit } => self.load_type_stats(limit).await,
+            CliRequest::LoadTypeStats { filter, limit } => {
+                self.load_type_stats(&filter, limit).await
+            }
         }
     }
 
@@ -166,9 +171,17 @@ impl CliWorker {
     }
 
     /// Load type statistics by fetching workflows and grouping by type
-    async fn load_type_stats(&self, limit: u32) {
-        debug!("Loading type stats with limit={}", limit);
-        match self.client.list(&WorkflowFilter::new(), limit).await {
+    async fn load_type_stats(&self, filter: &WorkflowFilter, limit: u32) {
+        debug!("Loading type stats with limit={}, filter={:?}", limit, filter);
+        // Build a date-only filter for type stats (ignore status/type/id filters)
+        let date_filter = WorkflowFilter {
+            start_time_after: filter.start_time_after,
+            start_time_before: filter.start_time_before,
+            close_time_after: filter.close_time_after,
+            close_time_before: filter.close_time_before,
+            ..WorkflowFilter::new()
+        };
+        match self.client.list(&date_filter, limit).await {
             Ok(workflows) => {
                 let stats = TypeStat::from_workflows(&workflows);
                 debug!("Computed {} type stats from {} workflows", stats.len(), workflows.len());
@@ -259,8 +272,8 @@ impl CliHandle {
     }
 
     /// Load type statistics
-    pub fn load_type_stats(&self, limit: u32) {
-        let _ = self.send(CliRequest::LoadTypeStats { limit });
+    pub fn load_type_stats(&self, filter: WorkflowFilter, limit: u32) {
+        let _ = self.send(CliRequest::LoadTypeStats { filter, limit });
     }
 
     /// Cancel a workflow

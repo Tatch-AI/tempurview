@@ -57,7 +57,9 @@ impl HelpBar {
             (View::TypeList, _) => vec![
                 ("j/k", "Navigate"),
                 ("Enter", "Select"),
+                ("d", "Date"),
                 ("s", "Sort"),
+                ("/", "Search"),
                 ("Esc", "Back"),
                 ("?", "Help"),
             ],

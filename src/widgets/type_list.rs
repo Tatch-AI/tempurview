@@ -22,6 +22,8 @@ const STATUS_COLUMNS: [WorkflowStatus; 7] = [
 pub struct TypeListWidget<'a> {
     type_stats: &'a LoadState<Vec<TypeStat>>,
     sort: &'a Option<(TypeListColumn, SortDirection)>,
+    date_label: Option<&'a str>,
+    name_filter: Option<&'a str>,
 }
 
 impl<'a> TypeListWidget<'a> {
@@ -29,15 +31,45 @@ impl<'a> TypeListWidget<'a> {
         type_stats: &'a LoadState<Vec<TypeStat>>,
         sort: &'a Option<(TypeListColumn, SortDirection)>,
     ) -> Self {
-        Self { type_stats, sort }
+        Self {
+            type_stats,
+            sort,
+            date_label: None,
+            name_filter: None,
+        }
     }
 
-    fn build_title(&self) -> String {
-        if let LoadState::Loaded(stats) = self.type_stats {
-            format!("Workflow Types ({})", stats.len())
+    pub fn date_label(mut self, label: Option<&'a str>) -> Self {
+        self.date_label = label;
+        self
+    }
+
+    pub fn name_filter(mut self, filter: Option<&'a str>) -> Self {
+        self.name_filter = filter;
+        self
+    }
+
+    fn build_title(&self, display_count: usize) -> String {
+        let mut title = if let LoadState::Loaded(_) = self.type_stats {
+            format!("Workflow Types ({})", display_count)
         } else {
             "Workflow Types".to_string()
+        };
+
+        let mut parts = Vec::new();
+        if let Some(label) = self.date_label {
+            parts.push(format!("since:{}", label));
         }
+        if let Some(filter) = self.name_filter {
+            if !filter.is_empty() {
+                parts.push(format!("name:{}*", filter));
+            }
+        }
+        if !parts.is_empty() {
+            title.push_str(" - ");
+            title.push_str(&parts.join(", "));
+        }
+        title
     }
 
     fn sort_indicator_for(&self, col: &TypeListColumn) -> &'static str {
@@ -109,13 +141,30 @@ impl StatefulWidget for TypeListWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         match self.type_stats {
             LoadState::Loaded(stats) => {
-                if stats.is_empty() {
+                // Apply client-side name filter
+                let filtered: Vec<&TypeStat> = if let Some(filter) = self.name_filter {
+                    if filter.is_empty() {
+                        stats.iter().collect()
+                    } else {
+                        let lower = filter.to_lowercase();
+                        stats
+                            .iter()
+                            .filter(|s| s.workflow_type.to_lowercase().contains(&lower))
+                            .collect()
+                    }
+                } else {
+                    stats.iter().collect()
+                };
+
+                let title = self.build_title(filtered.len());
+
+                if filtered.is_empty() {
                     let empty = Paragraph::new("No workflow types found")
                         .style(Style::default().add_modifier(Modifier::DIM))
                         .block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .title(self.build_title()),
+                                .title(title),
                         );
                     empty.render(area, buf);
                     return;
@@ -124,14 +173,14 @@ impl StatefulWidget for TypeListWidget<'_> {
                 let header = self.build_header();
                 let widths = self.build_widths();
 
-                let rows: Vec<Row> = stats.iter().map(|s| self.stat_to_row(s)).collect();
+                let rows: Vec<Row> = filtered.iter().map(|s| self.stat_to_row(s)).collect();
 
                 let table = Table::new(rows, widths)
                     .header(header)
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(self.build_title()),
+                            .title(title),
                     )
                     .row_highlight_style(
                         Style::default()
@@ -148,7 +197,7 @@ impl StatefulWidget for TypeListWidget<'_> {
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(self.build_title()),
+                            .title(self.build_title(0)),
                     );
                 loading.render(area, buf);
             }
@@ -158,7 +207,7 @@ impl StatefulWidget for TypeListWidget<'_> {
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(self.build_title()),
+                            .title(self.build_title(0)),
                     );
                 error.render(area, buf);
             }
@@ -168,7 +217,7 @@ impl StatefulWidget for TypeListWidget<'_> {
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(self.build_title()),
+                            .title(self.build_title(0)),
                     );
                 empty.render(area, buf);
             }

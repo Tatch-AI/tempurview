@@ -10,6 +10,7 @@ pub struct FilterInput<'a> {
     input: &'a str,
     is_active: bool,
     is_date_mode: bool,
+    is_search_mode: bool,
     date_label: Option<&'a str>,
 }
 
@@ -19,6 +20,7 @@ impl<'a> FilterInput<'a> {
             input,
             is_active: false,
             is_date_mode: false,
+            is_search_mode: false,
             date_label: None,
         }
     }
@@ -30,6 +32,11 @@ impl<'a> FilterInput<'a> {
 
     pub fn date_mode(mut self, is_date_mode: bool) -> Self {
         self.is_date_mode = is_date_mode;
+        self
+    }
+
+    pub fn search_mode(mut self, is_search_mode: bool) -> Self {
+        self.is_search_mode = is_search_mode;
         self
     }
 
@@ -70,6 +77,8 @@ impl Widget for FilterInput<'_> {
 
         let title: &str = if self.is_date_mode {
             "Date range (e.g. 2h, 3d, 1w, 2024-01-15) — Enter to apply, Esc to cancel"
+        } else if self.is_search_mode {
+            "Search types (Enter to apply, Esc to cancel)"
         } else if self.is_active {
             "Filter (Enter to apply, Esc to cancel)"
         } else {

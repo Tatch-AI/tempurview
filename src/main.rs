@@ -419,6 +419,10 @@ fn render(app: &App, frame: &mut Frame) {
         FilterInput::new(&app.date_range_input)
             .active(true)
             .date_mode(true)
+    } else if app.view == View::TypeList && app.input_mode == InputMode::FilterInput {
+        FilterInput::new(&app.filter_input)
+            .active(true)
+            .search_mode(true)
     } else {
         FilterInput::new(&app.filter_input)
             .active(app.input_mode == InputMode::FilterInput)
@@ -445,7 +449,9 @@ fn render(app: &App, frame: &mut Frame) {
         View::TypeList => {
             let mut table_state = app.type_table_state.clone();
             frame.render_stateful_widget(
-                TypeListWidget::new(&app.type_stats, &app.type_sort),
+                TypeListWidget::new(&app.type_stats, &app.type_sort)
+                    .date_label(app.active_date_range_label.as_deref())
+                    .name_filter(app.type_name_filter.as_deref()),
                 layout[3],
                 &mut table_state,
             );
@@ -533,7 +539,12 @@ fn handle_effects(effects: Vec<Effect>, cli_handle: &CliHandle, app: &App, defau
                 cli_handle.load_workflows(app.filter.clone(), effective_limit);
             }
             Effect::LoadTypeStats => {
-                cli_handle.load_type_stats(500);
+                let effective_limit = if app.filter.has_date_range() {
+                    500_u32.max(1000)
+                } else {
+                    500
+                };
+                cli_handle.load_type_stats(app.filter.clone(), effective_limit);
             }
             Effect::LoadWorkflowDetail(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());
