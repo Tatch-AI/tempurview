@@ -23,8 +23,13 @@ use tracing::{debug, error, info, warn};
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    // Load .env file if present (silently ignore if not found)
-    let _ = dotenvy::dotenv();
+    // Load .env file - check current directory first, then ~/.tempurview/.env
+    if dotenvy::dotenv().is_err() {
+        if let Some(config_dir) = logging::config_dir() {
+            let env_path = config_dir.join(".env");
+            let _ = dotenvy::from_path(&env_path);
+        }
+    }
 
     // Initialize logging FIRST (before color_eyre which may set up its own subscriber)
     if let Err(e) = logging::init() {
