@@ -291,3 +291,23 @@ graph LR
 - Saves ~2.5 MiB of raw protos from the package
 - Eliminates protoc system dependency for consumers
 - `cargo install tempurview` just works
+
+---
+
+## Binary Size
+
+**10 MB** release binary. Single file, no runtime dependencies.
+
+| Tool | Size | Notes |
+|------|------|-------|
+| **tpv** | **10 MB** | gRPC + TUI + CLI + async runtime |
+| ripgrep | ~5 MB | Narrower scope (regex search only) |
+| temporal CLI | ~30 MB | Go binary, broader API surface |
+| gh (GitHub CLI) | ~45 MB | Go binary |
+| kubectl | ~50 MB | Go binary |
+
+Rust's zero-cost abstractions and lack of a garbage-collected runtime
+keep the binary compact despite including tonic, ratatui, clap, and tokio.
+
+Could go smaller with `strip`, `lto = "fat"`, or `opt-level = "z"`,
+but 10 MB is a non-issue for a CLI tool.
