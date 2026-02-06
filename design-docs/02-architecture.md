@@ -1,35 +1,17 @@
 ---
 marp: true
-theme: default
+theme: ember
 paginate: true
-backgroundColor: #1a1a2e
-color: #e0e0e0
-style: |
-  section {
-    font-family: 'SF Mono', 'Fira Code', monospace;
-  }
-  h1 {
-    color: #00d4ff;
-  }
-  h2 {
-    color: #7b68ee;
-  }
-  code {
-    background: #2a2a4a;
-    color: #00ff88;
-  }
-  strong {
-    color: #ff6b6b;
-  }
-  blockquote {
-    border-left: 4px solid #7b68ee;
-    color: #b0b0d0;
-  }
 ---
+
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'dark', flowchart: { htmlLabels: true, nodeSpacing: 30, rankSpacing: 30 } });
+</script>
 
 # Architecture
 
-### How Tempurview is built
+### How TemPurview is built
 
 ---
 
@@ -38,13 +20,16 @@ style: |
 | Layer | Technology | Why |
 |-------|-----------|-----|
 | Language | **Rust** | Zero-cost abstractions, no runtime, single binary |
+| Temporal API | **gRPC + Protobuf** | Temporal's official API surface; typed, versioned |
+| gRPC client | **tonic** | Native async Rust gRPC, TLS support |
 | CLI parsing | **clap 4** (derive) | Industry standard, env var support, auto-help |
 | TUI framework | **ratatui** | Immediate-mode rendering, rich widgets |
 | Terminal I/O | **crossterm** | Cross-platform terminal manipulation |
-| gRPC client | **tonic** | Native async Rust gRPC, TLS support |
 | Async runtime | **tokio** | The Rust async runtime |
 | Table output | **comfy-table** | Unicode box-drawing, dynamic column widths |
 | Serialization | **serde** | Zero-copy deserialization, derive macros |
+| Release mgmt | **prek** | Automated versioning, changelog, crates.io publish |
+| CI/CD | **GitHub Actions** | Build, test, lint, publish on every push/PR |
 
 ---
 
@@ -76,28 +61,28 @@ src/
 
 ## Two Execution Paths
 
-```
-                    Cli::parse()
-                        |
-              +---------+---------+
-              |                   |
-         No subcommand       Subcommand
-              |                   |
-         run_tui()          create_client()
-              |                   |
-    +---------+-------+     +---------+
-    | App state       |     | Direct  |
-    | EventHandler    |     | client  |
-    | CliWorker       |     | call    |
-    | Main loop       |     |         |
-    +---------+-------+     +----+----+
-              |                  |
-         ratatui render     OutputFormat
-                                |
-                        +-------+-------+
-                        |               |
-                    Table (TTY)    JSON (pipe)
-```
+<div class="mermaid">
+graph LR
+    A["Cli::parse()"] --> B{Subcommand?}
+    B -->|None| C["run_tui()"]
+    B -->|Some| D["create_client()"]
+    C --> E["App + CliWorker"]
+    E --> F["ratatui"]
+    D --> G["Direct call"]
+    G --> H{"OutputFormat"}
+    H --> I["Table"]
+    H --> J["JSON"]
+    style A fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+    style B fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style C fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+    style D fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+    style E fill:#295264,stroke:#5097b7,color:#f6e1ce
+    style F fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style G fill:#295264,stroke:#5097b7,color:#f6e1ce
+    style H fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style I fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style J fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+</div>
 
 ---
 
@@ -105,13 +90,21 @@ src/
 
 The TUI uses **The Elm Architecture**:
 
-```
-Event → Action → update(state, action) → (State, Effects)
-                                              |
-                                         Side effects
-                                              |
-                                    CliWorker → Action
-```
+<div class="mermaid">
+graph LR
+    A["Event"] --> B["Action"]
+    B --> C["update(state, action)"]
+    C --> D["State + Effects"]
+    D --> E["Side effects"]
+    E --> F["CliWorker"]
+    F --> B
+    style A fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+    style B fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style C fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+    style D fill:#295264,stroke:#22c55e,color:#f6e1ce
+    style E fill:#1d3a47,stroke:#ff6d63,color:#f6e1ce
+    style F fill:#295264,stroke:#5097b7,color:#f6e1ce
+</div>
 
 Inspired by Elm, Redux, and the
 [ratatui component pattern](https://ratatui.rs/concepts/application-patterns/the-elm-architecture/).
@@ -195,7 +188,11 @@ Testable without a Temporal server.
 
 ---
 
+<!-- _class: cols -->
+
 ## Output Layer: The TableDisplay Trait
+
+<div class="left">
 
 ```rust
 pub trait TableDisplay {
@@ -203,20 +200,23 @@ pub trait TableDisplay {
 }
 ```
 
-Implemented for every domain type that can be displayed:
+Every type also derives `Serialize` for JSON output.
+One trait, two formats, zero duplication.
 
-| Type | Table Format |
-|------|-------------|
-| `Vec<WorkflowSummary>` | STATUS, TYPE, ID, STARTED, QUEUE |
+</div>
+<div class="right">
+
+| Type | Columns |
+|------|---------|
+| `Vec<WorkflowSummary>` | STATUS, TYPE, ID, ... |
 | `WorkflowDetail` | Key-value pairs |
-| `Vec<ActivityExecution>` | ID, TYPE, STATUS, ATTEMPT, WAIT, TIME |
-| `Vec<HistoryEvent>` | EVENT ID, TYPE, TIMESTAMP |
-| `InsightsResult` | SEVERITY, CATEGORY, TITLE, AFFECTED |
+| `Vec<ActivityExecution>` | ID, TYPE, STATUS, ... |
+| `Vec<HistoryEvent>` | ID, TYPE, TIMESTAMP |
+| `InsightsResult` | SEV, CAT, TITLE, ... |
 | `StatusCounts` | STATUS, COUNT |
 | `Config` | SETTING, VALUE |
 
-Every type also derives `Serialize` for JSON output.
-One trait, two formats, zero duplication.
+</div>
 
 ---
 
@@ -242,14 +242,23 @@ Same pattern as **kubectl**, **docker**, **terraform**.
 
 ## Error Handling
 
-```
-CLI mode:
-  Error → color_eyre → stderr + exit code 1
-
-TUI mode:
-  Error → Action::Error(String) → UI error bar
-  (non-fatal, keeps running)
-```
+<div class="mermaid">
+graph LR
+    subgraph CLI Mode
+        A1["Error"] --> B1["color_eyre"]
+        B1 --> C1["stderr + exit 1"]
+    end
+    subgraph TUI Mode
+        A2["Error"] --> B2["Action::Error"]
+        B2 --> C2["UI error bar\n(non-fatal)"]
+    end
+    style A1 fill:#1d3a47,stroke:#ff6d63,color:#f6e1ce
+    style B1 fill:#295264,stroke:#5097b7,color:#f6e1ce
+    style C1 fill:#1d3a47,stroke:#ff6d63,color:#f6e1ce
+    style A2 fill:#1d3a47,stroke:#ff6d63,color:#f6e1ce
+    style B2 fill:#295264,stroke:#5097b7,color:#f6e1ce
+    style C2 fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+</div>
 
 CLI errors propagate naturally with `?`.
 TUI errors are caught and displayed without crashing.
@@ -258,6 +267,8 @@ The split is intentional. A CLI tool should fail loudly.
 A TUI should be resilient.
 
 ---
+
+<!-- _class: compact -->
 
 ## Proto Build Strategy
 

@@ -1,0 +1,3 @@
+html: true
+allowLocalFiles: true
+themeSet: ./ember.css

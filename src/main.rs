@@ -66,6 +66,15 @@ async fn main() -> color_eyre::Result<()> {
         // No subcommand → launch TUI (backward compat)
         None => run_tui(config).await,
 
+        Some(tempurview::cli::Commands::Completions { shell }) => {
+            use clap::CommandFactory;
+            use clap_complete::generate;
+            let mut cmd = Cli::command();
+            let bin_name = cmd.get_name().to_string();
+            generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
+            Ok(())
+        }
+
         Some(tempurview::cli::Commands::TestConnection) => {
             commands::connection::handle(&config).await
         }
@@ -107,7 +116,8 @@ async fn main() -> color_eyre::Result<()> {
                 }
                 // Already handled above
                 tempurview::cli::Commands::TestConnection
-                | tempurview::cli::Commands::Config { .. } => unreachable!(),
+                | tempurview::cli::Commands::Config { .. }
+                | tempurview::cli::Commands::Completions { .. } => unreachable!(),
             }
         }
     }

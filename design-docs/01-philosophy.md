@@ -1,36 +1,15 @@
 ---
 marp: true
-theme: default
+theme: ember
 paginate: true
-backgroundColor: #1a1a2e
-color: #e0e0e0
-style: |
-  section {
-    font-family: 'SF Mono', 'Fira Code', monospace;
-  }
-  h1 {
-    color: #00d4ff;
-  }
-  h2 {
-    color: #7b68ee;
-  }
-  code {
-    background: #2a2a4a;
-    color: #00ff88;
-  }
-  strong {
-    color: #ff6b6b;
-  }
-  a {
-    color: #00d4ff;
-  }
-  blockquote {
-    border-left: 4px solid #7b68ee;
-    color: #b0b0d0;
-  }
 ---
 
-# Tempurview
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'dark', flowchart: { htmlLabels: true, nodeSpacing: 30, rankSpacing: 30 } });
+</script>
+
+# TemPurview
 
 ### A CLI-first terminal tool for Temporal workflows
 
@@ -55,6 +34,23 @@ These questions should be one command away.
 
 ---
 
+## The Deeper Problem
+
+- Workflows can **succeed while silently swallowing issues**
+  - Developers implement inconsistent error handling across activities and workflows
+  - A retry that eventually succeeds doesn't show up as a failure — but it's still a problem
+
+- Horizontal scaling of workers creates a **logging explosion**
+  - 10 workers retrying the same activity type produces 10x the log volume with no additional signal
+  - More infrastructure, more noise, less clarity
+
+- The Web UI shows you individual workflows
+  - It doesn't tell you **what's going wrong across your fleet**
+
+TemPurview's `insight scan` semantics exist to cut through the noise.
+
+---
+
 ## Design Philosophy
 
 **CLI-first, TUI-enhanced.**
@@ -71,17 +67,17 @@ This is the same philosophy behind:
 
 ## Principle: Composability Over Features
 
-A tool that works with Unix pipes is more powerful
-than a tool with every feature built in.
+***A tool that works with Unix pipes is more powerful
+than a tool with every feature built in.***
 
 ```bash
 # Count failed workflows by type
-tempurview workflow list --status failed --output json \
+tpv workflow list --status failed --output json \
   | jq -r '.[] | .workflow_type' \
   | sort | uniq -c | sort -rn
 
 # Alert on stuck workflows
-tempurview insight scan --since 1h --output json \
+tpv insight scan --since 1h --output json \
   | jq '.findings[] | select(.severity == "critical")'
 ```
 
@@ -96,17 +92,17 @@ The JSON output format is not an afterthought.
 and interactive exploration.
 
 ```
-tempurview              # Launch TUI
-tempurview --mock       # Launch TUI with mock data
+tpv                     # Launch TUI
+tpv --mock              # Launch TUI with mock data
 ```
 
 **Subcommands = CLI** for scripting, CI/CD, and
 quick answers.
 
 ```
-tempurview workflow list --status running
-tempurview insight scan --since 2h
-tempurview config show
+tpv workflow list --status running
+tpv insight scan --since 2h
+tpv config show
 ```
 
 Same tool. Two interaction paradigms.
@@ -135,9 +131,9 @@ this pattern for developer tools.
 Global flags work everywhere:
 
 ```bash
-tempurview --mock workflow list
-tempurview workflow list --mock
-tempurview workflow --mock list
+tpv --mock workflow list
+tpv workflow list --mock
+tpv workflow --mock list
 ```
 
 All equivalent. Clap's `global = true` makes this
@@ -148,7 +144,7 @@ Environment variables are respected:
 ```bash
 export TEMPORAL_ADDRESS=localhost:7233
 export TEMPORAL_NAMESPACE=default
-tempurview workflow count  # Just works
+tpv workflow count  # Just works
 ```
 
 ---
@@ -159,7 +155,7 @@ tempurview workflow count  # Just works
   Every parameter is a flag or argument.
 
 - **No configuration wizard**.
-  Environment variables and `~/.tempurview/config.toml`.
+  Environment variables and `~/.config/tempurview/config.toml`.
 
 - **No daemon mode**.
   One invocation, one result, one exit code.
@@ -175,24 +171,55 @@ tempurview workflow count  # Just works
 
 ## The Operator's Workflow
 
-```
-                 Quick question?
-                      |
-              tempurview workflow count
-                      |
-                 Need context?
-                      |
-              tempurview workflow list --status failed
-                      |
-                 Need depth?
-                      |
-              tempurview insight scan --since 2h
-                      |
-                 Need exploration?
-                      |
-                  tempurview
-                  (launches TUI)
-```
+<div class="mermaid">
+graph LR
+    A["Quick question?"] --> B["tpv workflow count"]
+    B --> C{"Need context?"}
+    C -->|Yes| D["tpv workflow list<br>--status failed"]
+    D --> E{"Need depth?"}
+    E -->|Yes| F["tpv insight scan<br>--since 2h"]
+    F --> G{"Need exploration?"}
+    G -->|Yes| H["tpv<br>(launches TUI)"]
+    C -->|No| I["Done"]
+    E -->|No| I
+    G -->|No| I
+    style A fill:#295264,stroke:#5097b7,color:#f6e1ce
+    style B fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style C fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style D fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style E fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style F fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style G fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style H fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style I fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+</div>
 
-Every level of detail is one command deeper.
-Never more.
+Every level of detail is one command deeper. Never more.
+
+---
+
+## LLM Agent's Workflow
+
+<div class="mermaid">
+graph LR
+    A["Cron trigger"] --> B["List failed<br>workflows"]
+    B --> C["Insight scan"]
+    C --> D{"Findings?"}
+    D -->|None| E["Healthy"]
+    D -->|Yes| F["Triage"]
+    F --> G["Fetch detail<br>+ activities<br>+ events"]
+    G --> H["LLM correlates<br>root cause"]
+    H --> I["Alert / Report"]
+    style A fill:#295264,stroke:#5097b7,color:#f6e1ce
+    style B fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style C fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style D fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style E fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+    style F fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style G fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style H fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style I fill:#1d3a47,stroke:#ff6d63,color:#f6e1ce
+</div>
+
+The CLI's JSON output is the **agent's API**.
+No SDK. No client library. Just `stdout`.

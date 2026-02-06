@@ -1,30 +1,7 @@
 ---
 marp: true
-theme: default
+theme: ember
 paginate: true
-backgroundColor: #1a1a2e
-color: #e0e0e0
-style: |
-  section {
-    font-family: 'SF Mono', 'Fira Code', monospace;
-  }
-  h1 {
-    color: #00d4ff;
-  }
-  h2 {
-    color: #7b68ee;
-  }
-  code {
-    background: #2a2a4a;
-    color: #00ff88;
-  }
-  strong {
-    color: #ff6b6b;
-  }
-  blockquote {
-    border-left: 4px solid #7b68ee;
-    color: #b0b0d0;
-  }
 ---
 
 # CLI Design
@@ -36,17 +13,17 @@ style: |
 ## Command Taxonomy
 
 ```
-tempurview                          # TUI (default)
-tempurview workflow list            # List workflows
-tempurview workflow get <ID>        # Describe a workflow
-tempurview workflow count           # Count workflows
-tempurview workflow cancel <ID>     # Cancel a workflow
-tempurview workflow terminate <ID>  # Terminate a workflow
-tempurview activity list <ID>      # List activities
-tempurview event list <ID>         # List history events
-tempurview insight scan             # Run insights analysis
-tempurview config show              # Show configuration
-tempurview test-connection          # Verify connectivity
+tpv                                 # TUI (default)
+tpv workflow list                   # List workflows
+tpv workflow get <ID>               # Describe a workflow
+tpv workflow count                  # Count workflows
+tpv workflow cancel <ID>            # Cancel a workflow
+tpv workflow terminate <ID>         # Terminate a workflow
+tpv activity list <ID>             # List activities
+tpv event list <ID>                # List history events
+tpv insight scan                    # Run insights analysis
+tpv config show                     # Show configuration
+tpv test-connection                 # Verify connectivity
 ```
 
 **Noun-verb pattern**: `<resource> <action>`
@@ -60,9 +37,9 @@ Same pattern as **kubectl**, **gh**, **docker**.
 **Singular nouns**, not plural:
 
 ```
-tempurview workflow list       # not "workflows list"
-tempurview activity list       # not "activities list"
-tempurview insight scan        # not "insights scan"
+tpv workflow list       # not "workflows list"
+tpv activity list       # not "activities list"
+tpv insight scan        # not "insights scan"
 ```
 
 Follows the precedent of:
@@ -94,9 +71,9 @@ Powered by clap's `#[arg(global = true)]`.
 
 ```bash
 # All equivalent:
-tempurview --mock workflow list
-tempurview workflow --mock list
-tempurview workflow list --mock
+tpv --mock workflow list
+tpv workflow --mock list
+tpv workflow list --mock
 ```
 
 ---
@@ -147,7 +124,7 @@ pub fn resolve(explicit: Option<OutputFormatArg>) -> Self {
 
 Interactive:
 ```bash
-$ tempurview workflow list --mock
+$ tpv workflow list --mock
 ┌────────┬──────────────────────┬──────────────────┐
 │ STATUS ┆ TYPE                 ┆ WORKFLOW ID       │
 ...
@@ -155,7 +132,7 @@ $ tempurview workflow list --mock
 
 Piped:
 ```bash
-$ tempurview workflow list --mock | jq '.[0]'
+$ tpv workflow list --mock | jq '.[0]'
 {
   "workflow_id": "order-123",
   "status": "Running",
@@ -168,7 +145,7 @@ $ tempurview workflow list --mock | jq '.[0]'
 ## Subcommand: workflow list
 
 ```
-tempurview workflow list [OPTIONS]
+tpv workflow list [OPTIONS]
 
 Options:
   --status <STATUS>               Filter by execution status
@@ -184,10 +161,10 @@ Accepts human-friendly time formats:
 
 ```bash
 # Failed workflows in the last 2 hours
-tempurview workflow list --status failed --since 2h
+tpv workflow list --status failed --since 2h
 
 # All payment workflows since Monday
-tempurview workflow list --workflow-type PaymentWorkflow --since 2024-01-15
+tpv workflow list --workflow-type PaymentWorkflow --since 2024-01-15
 ```
 
 ---
@@ -195,7 +172,7 @@ tempurview workflow list --workflow-type PaymentWorkflow --since 2024-01-15
 ## Subcommand: workflow get
 
 ```
-tempurview workflow get <WORKFLOW_ID> [--run-id <RUN_ID>]
+tpv workflow get <WORKFLOW_ID> [--run-id <RUN_ID>]
 ```
 
 Key-value table for TTY:
@@ -216,7 +193,7 @@ Key-value table for TTY:
 
 Full JSON for automation:
 ```bash
-tempurview workflow get order-456 --output json | jq '.failure'
+tpv workflow get order-456 --output json | jq '.failure'
 ```
 
 ---
@@ -224,7 +201,7 @@ tempurview workflow get order-456 --output json | jq '.failure'
 ## Subcommand: insight scan
 
 ```
-tempurview insight scan [--since <SINCE>] [--before <BEFORE>]
+tpv insight scan [--since <SINCE>] [--before <BEFORE>]
 ```
 
 Multi-step pipeline:
@@ -252,7 +229,7 @@ Scanned 50 workflows, fetched 30 histories in 1.6s. 27 findings.
 ## Subcommand: test-connection
 
 ```
-tempurview test-connection [--mock]
+tpv test-connection [--mock]
 ```
 
 Validates:
@@ -294,7 +271,7 @@ Follows POSIX conventions.
 Machine-parseable with `$?`.
 
 ```bash
-if tempurview workflow count --status failed --output json \
+if tpv workflow count --status failed --output json \
     | jq -e '. > 100' > /dev/null; then
   echo "ALERT: More than 100 failed workflows"
 fi
@@ -304,7 +281,7 @@ fi
 
 ## Design Anchors
 
-Tempurview's CLI draws from proven patterns:
+TemPurview's CLI draws from proven patterns:
 
 | Pattern | Source |
 |---------|--------|

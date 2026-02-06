@@ -1,0 +1,301 @@
+/* @theme ember */
+/* @auto-scaling fittingHeader,code,math */
+
+@import 'default';
+
+:root {
+  /* Ember palette */
+  --ember-blue-100: #5097b7;
+  --ember-blue-300: #356981;
+  --ember-blue-400: #295264;
+  --ember-blue-500: #1d3a47;
+  --ember-blue-600: #0d191f;
+  --ember-salmon-300: #ffb9b5;
+  --ember-salmon-500: #ff6d63;
+  --ember-salmon-600: #ff382b;
+  --ember-creme-500: #f6e1ce;
+  --ember-creme-600: #edc49f;
+  --ember-green-500: #22c55e;
+  --ember-green-600: #16a34a;
+}
+
+section {
+  background-color: var(--ember-blue-600);
+  color: var(--ember-creme-500);
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  font-size: 24px;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  padding: 40px 50px;
+}
+
+h1 {
+  color: var(--ember-salmon-500);
+  font-weight: 700;
+  margin-bottom: 0.3em;
+}
+
+h2 {
+  color: var(--ember-blue-100);
+  font-weight: 600;
+  margin-bottom: 0.3em;
+}
+
+h3, h4, h5, h6 {
+  color: var(--ember-creme-600);
+  font-weight: 600;
+}
+
+a {
+  color: var(--ember-salmon-500);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+strong {
+  color: var(--ember-salmon-500);
+}
+
+ul, ol {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+}
+
+li {
+  margin-bottom: 0.15em;
+}
+
+p {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+code {
+  background: var(--ember-blue-500);
+  color: var(--ember-creme-500);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+
+pre {
+  background: var(--ember-blue-500);
+  border-radius: 8px;
+  padding: 0.6em 0.8em;
+  border: 1px solid #ffffff18;
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.72em;
+  line-height: 1.35;
+}
+
+blockquote {
+  border-left: 4px solid var(--ember-salmon-500);
+  color: var(--ember-creme-600);
+  padding-left: 1em;
+  font-style: italic;
+}
+
+/* --- Syntax highlighting (highlight.js overrides) --- */
+
+pre .hljs-keyword,
+pre .hljs-selector-tag {
+  color: var(--ember-salmon-500);
+  font-weight: 600;
+}
+
+pre .hljs-built_in,
+pre .hljs-type {
+  color: var(--ember-creme-600);
+}
+
+pre .hljs-title,
+pre .hljs-title.function_,
+pre .hljs-title.class_ {
+  color: var(--ember-blue-100);
+}
+
+pre .hljs-string,
+pre .hljs-addition {
+  color: var(--ember-green-500);
+}
+
+pre .hljs-comment,
+pre .hljs-meta {
+  color: var(--ember-blue-300);
+  font-style: italic;
+}
+
+pre .hljs-number,
+pre .hljs-literal {
+  color: var(--ember-salmon-300);
+}
+
+pre .hljs-variable,
+pre .hljs-template-variable,
+pre .hljs-attr {
+  color: var(--ember-creme-600);
+}
+
+pre .hljs-symbol,
+pre .hljs-bullet {
+  color: var(--ember-salmon-500);
+}
+
+pre .hljs-params {
+  color: var(--ember-creme-500);
+}
+
+pre .hljs-deletion {
+  color: var(--ember-salmon-600);
+}
+
+pre .hljs-operator,
+pre .hljs-punctuation {
+  color: var(--ember-creme-600);
+}
+
+/* --- Tables --- */
+
+table {
+  border-collapse: collapse;
+  font-size: 0.75em;
+  width: 100%;
+}
+
+th {
+  background: var(--ember-blue-400);
+  color: var(--ember-creme-500);
+  font-weight: 600;
+  padding: 0.4em 0.65em;
+  border-bottom: 2px solid var(--ember-salmon-500);
+  text-align: left;
+}
+
+td {
+  padding: 0.35em 0.65em;
+  border-bottom: 1px solid var(--ember-blue-300);
+  color: var(--ember-creme-500);
+}
+
+tr:nth-child(even) td {
+  background: var(--ember-blue-500);
+}
+
+tr:nth-child(odd) td {
+  background: #152a34;
+}
+
+/* --- Two-column layout --- */
+/* Use: <!-- _class: cols --> then <div class="left"> and <div class="right"> */
+
+section.cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 0 1.5em;
+}
+
+section.cols > h1,
+section.cols > h2,
+section.cols > h3 {
+  grid-column: 1 / -1;
+}
+
+section.cols .left {
+  grid-column: 1;
+}
+
+section.cols .right {
+  grid-column: 2;
+}
+
+/* 60/40 split variant */
+section.cols-60-40 {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  grid-template-rows: auto 1fr;
+  gap: 0 1.5em;
+}
+
+section.cols-60-40 > h1,
+section.cols-60-40 > h2,
+section.cols-60-40 > h3 {
+  grid-column: 1 / -1;
+}
+
+section.cols-60-40 .left {
+  grid-column: 1;
+}
+
+section.cols-60-40 .right {
+  grid-column: 2;
+}
+
+/* --- Logo watermark --- */
+section::before {
+  content: '';
+  position: absolute;
+  right: 30px;
+  bottom: 25px;
+  width: 48px;
+  height: 48px;
+  background: url('./logo.svg') no-repeat center / contain;
+  opacity: 0.5;
+}
+
+/* --- Mermaid diagram sizing --- */
+
+.mermaid {
+  display: flex;
+  justify-content: center;
+  max-height: 400px;
+  width: 100%;
+}
+
+.mermaid svg {
+  max-height: 400px;
+  max-width: 100%;
+  height: auto;
+}
+
+/* --- Slide variants --- */
+
+/* Title slide: centered content */
+section.lead {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+
+section.lead h1 {
+  font-size: 1.8em;
+}
+
+/* Compact: for dense slides */
+section.compact {
+  font-size: 20px;
+}
+
+section.compact pre code {
+  font-size: 0.68em;
+}
+
+section.compact table {
+  font-size: 0.7em;
+}
+
+/* --- Pagination --- */
+
+section::after {
+  color: var(--ember-blue-100);
+  font-size: 0.6em;
+}

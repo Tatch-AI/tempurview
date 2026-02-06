@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 /// Version from git tag at build time, falls back to Cargo.toml version
 const VERSION: &str = env!("GIT_VERSION");
@@ -84,6 +85,11 @@ pub enum Commands {
     },
     /// Test connection to Temporal server
     TestConnection,
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        shell: Shell,
+    },
     /// Start a web UI server
     Serve {
         /// Port to listen on

@@ -65,6 +65,7 @@ toml = "0.8"
 
 # CLI argument parsing
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 
 # Table output for CLI mode
 comfy-table = "7"

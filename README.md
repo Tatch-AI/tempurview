@@ -47,6 +47,24 @@ cd docs && mdbook serve --open
 
 The [`design-docs/`](design-docs/) directory contains [Marp](https://marp.app) slide decks covering the project philosophy, architecture, and CLI design. Open them in any Marp-compatible viewer or VS Code with the Marp extension.
 
+The decks use a custom Ember theme (`design-docs/ember.css`). A `.marprc.yml` config in `design-docs/` auto-loads the theme, HTML mode, and local file access — no extra flags needed:
+
+```bash
+npm install -g @marp-team/marp-cli  # one-time
+
+# Launch a live-preview server (from design-docs/)
+cd design-docs && marp -s .
+
+# Custom port
+cd design-docs && PORT=7777 marp -s .
+
+# Convert all decks to HTML
+cd design-docs && marp *.md
+
+# Export to PDF
+cd design-docs && marp --pdf 01-philosophy.md
+```
+
 ## License
 
 MIT
