@@ -1,7 +1,8 @@
 use crate::action::{Action, DataPayload, TableColumn};
 use crate::domain::{
-    parse_date_input, SortDirection, StatusCounts, TypeListColumn, TypeStat, WorkflowDetail,
-    WorkflowFilter, WorkflowStatus, WorkflowSummary,
+    correlate_activities, parse_date_input, ActivityExecution, HistoryEvent, SortDirection,
+    StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter, WorkflowStatus,
+    WorkflowSummary,
 };
 use ratatui::widgets::TableState;
 use std::collections::HashSet;
@@ -13,6 +14,7 @@ pub enum View {
     WorkflowList,
     WorkflowDetail,
     TypeList,
+    ActivityList,
 }
 
 /// Input mode
@@ -87,6 +89,12 @@ pub struct App {
     pub type_stats: LoadState<Vec<TypeStat>>,
     pub type_table_state: TableState,
 
+    // ActivityList state
+    pub activity_events: LoadState<Vec<HistoryEvent>>,
+    pub activities: Vec<ActivityExecution>,
+    pub activity_table_state: TableState,
+    pub expanded_activity: Option<usize>,
+
     // Config
     pub temporal_namespace: String,
 
@@ -137,6 +145,11 @@ impl App {
 
             type_stats: LoadState::NotLoaded,
             type_table_state: TableState::default().with_selected(0),
+
+            activity_events: LoadState::NotLoaded,
+            activities: Vec::new(),
+            activity_table_state: TableState::default().with_selected(0),
+            expanded_activity: None,
 
             temporal_namespace: String::new(),
 
@@ -239,8 +252,14 @@ impl App {
                     self.input_mode = InputMode::Normal;
                     self.filter_input.clear();
                 } else if let Some(prev_view) = self.view_stack.pop() {
+                    if self.view == View::ActivityList {
+                        self.activity_events = LoadState::NotLoaded;
+                        self.activities.clear();
+                        self.expanded_activity = None;
+                    } else {
+                        self.selected_workflow = None;
+                    }
                     self.view = prev_view;
-                    self.selected_workflow = None;
                 } else if self.view == View::WorkflowDetail {
                     self.view = View::WorkflowList;
                     self.selected_workflow = None;
@@ -369,6 +388,18 @@ impl App {
             }
             Action::Refresh => {
                 self.last_refresh = Some(Instant::now());
+                if self.view == View::ActivityList {
+                    // In activity view, reload history for the current workflow
+                    if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
+                        let wf_id = detail.summary.workflow_id.clone();
+                        let run_id = Some(detail.summary.run_id.clone());
+                        self.activity_events = LoadState::Loading;
+                        self.activities.clear();
+                        self.expanded_activity = None;
+                        return vec![Effect::LoadHistory(wf_id, run_id)];
+                    }
+                    return vec![];
+                }
                 let mut effects = vec![Effect::LoadCounts, Effect::LoadWorkflows];
                 self.status_counts = LoadState::Loading;
                 self.workflows = LoadState::Loading;
@@ -403,6 +434,35 @@ impl App {
                 } else {
                     vec![]
                 }
+            }
+            Action::ViewActivities => {
+                // Get workflow_id and run_id from the currently loaded detail
+                if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
+                    let wf_id = detail.summary.workflow_id.clone();
+                    let run_id = Some(detail.summary.run_id.clone());
+                    self.view_stack.push(self.view);
+                    self.view = View::ActivityList;
+                    self.activity_events = LoadState::Loading;
+                    self.activities.clear();
+                    self.activity_table_state.select(Some(0));
+                    self.expanded_activity = None;
+                    vec![Effect::LoadHistory(wf_id, run_id)]
+                } else {
+                    self.last_error = Some("No workflow loaded".to_string());
+                    vec![]
+                }
+            }
+            Action::ToggleActivityDetail => {
+                if let Some(selected) = self.activity_table_state.selected() {
+                    if selected < self.activities.len() {
+                        if self.expanded_activity == Some(selected) {
+                            self.expanded_activity = None;
+                        } else {
+                            self.expanded_activity = Some(selected);
+                        }
+                    }
+                }
+                vec![]
             }
             Action::ViewTypeList => {
                 self.view_stack.push(self.view);
@@ -604,6 +664,16 @@ impl App {
                             }
                         }
                     }
+                    DataPayload::History(events) => {
+                        self.activities = correlate_activities(&events);
+                        self.activity_events = LoadState::Loaded(events);
+                        // Reset selection if out of bounds
+                        let selected = self.activity_table_state.selected().unwrap_or(0);
+                        if selected >= self.activities.len() && !self.activities.is_empty() {
+                            self.activity_table_state
+                                .select(Some(self.activities.len() - 1));
+                        }
+                    }
                 }
                 vec![]
             }
@@ -617,7 +687,10 @@ impl App {
                     self.workflows = LoadState::Error(msg.clone());
                 }
                 if let Some(LoadState::Loading) = self.selected_workflow {
-                    self.selected_workflow = Some(LoadState::Error(msg));
+                    self.selected_workflow = Some(LoadState::Error(msg.clone()));
+                }
+                if self.activity_events.is_loading() {
+                    self.activity_events = LoadState::Error(msg);
                 }
                 vec![]
             }
@@ -687,6 +760,7 @@ impl App {
     fn current_table_state_mut(&mut self) -> &mut TableState {
         match self.view {
             View::TypeList => &mut self.type_table_state,
+            View::ActivityList => &mut self.activity_table_state,
             _ => &mut self.table_state,
         }
     }
@@ -700,6 +774,7 @@ impl App {
                     0
                 }
             }
+            View::ActivityList => self.activities.len(),
             _ => {
                 if let LoadState::Loaded(ref workflows) = self.workflows {
                     workflows.len()
@@ -824,6 +899,7 @@ pub enum Effect {
     LoadWorkflows,
     LoadWorkflowDetail(String),
     LoadTypeStats,
+    LoadHistory(String, Option<String>),
     CancelWorkflow(String),
     TerminateWorkflow(String),
     CopyToClipboard(String),

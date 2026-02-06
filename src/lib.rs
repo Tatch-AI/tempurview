@@ -25,8 +25,8 @@ pub use client::{
 };
 pub use config::{Config, ConfigError};
 pub use domain::{
-    FailureInfo, HistoryEvent, StatusCounts, WorkflowDetail, WorkflowFilter, WorkflowStatus,
-    WorkflowSummary,
+    ActivityExecution, ActivityStatus, FailureInfo, HistoryEvent, StatusCounts, WorkflowDetail,
+    WorkflowFilter, WorkflowStatus, WorkflowSummary,
 };
 
 /// Test utilities for building tests

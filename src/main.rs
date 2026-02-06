@@ -11,8 +11,8 @@ use tempurview::event::{event_to_action, EventHandler};
 use tempurview::logging;
 use tempurview::tui::Tui;
 use tempurview::widgets::{
-    FilterInput, HelpBar, HelpOverlay, StatusDashboard, TypeListWidget, WorkflowDetailWidget,
-    WorkflowListWidget,
+    ActivityListWidget, FilterInput, HelpBar, HelpOverlay, StatusDashboard, TypeListWidget,
+    WorkflowDetailWidget, WorkflowListWidget,
 };
 
 use ratatui::{
@@ -462,6 +462,15 @@ fn render(app: &App, frame: &mut Frame) {
                 frame.render_widget(WorkflowDetailWidget::new(detail), layout[3]);
             }
         }
+        View::ActivityList => {
+            let mut table_state = app.activity_table_state.clone();
+            frame.render_stateful_widget(
+                ActivityListWidget::new(&app.activity_events, &app.activities)
+                    .expanded(app.expanded_activity),
+                layout[3],
+                &mut table_state,
+            );
+        }
     }
 
     // Render help bar
@@ -483,6 +492,7 @@ fn render_title(app: &App, frame: &mut Frame, area: Rect) {
         View::WorkflowList => "Workflows",
         View::TypeList => "Workflow Types",
         View::WorkflowDetail => "Workflow Detail",
+        View::ActivityList => "Activities",
     };
 
     let title = Paragraph::new(Span::styled(
@@ -556,6 +566,9 @@ fn handle_effects(
             Effect::LoadWorkflowDetail(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());
                 cli_handle.load_detail(id, run_id);
+            }
+            Effect::LoadHistory(workflow_id, run_id) => {
+                cli_handle.load_history(workflow_id, run_id);
             }
             Effect::CancelWorkflow(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());

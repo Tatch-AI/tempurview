@@ -256,8 +256,8 @@ impl TemporalClient for MockTemporalClient {
             .find(|w| w.workflow_id == workflow_id)
             .ok_or_else(|| ClientError::NotFound(workflow_id.to_string()))?;
 
-        // Generate mock history events
-        let events = vec![
+        let mut rng = rand::thread_rng();
+        let mut events = vec![
             HistoryEvent {
                 event_id: 1,
                 event_type: "WorkflowExecutionStarted".to_string(),
@@ -276,7 +276,143 @@ impl TemporalClient for MockTemporalClient {
                 timestamp: workflow.start_time,
                 details: serde_json::json!({}),
             },
+            HistoryEvent {
+                event_id: 4,
+                event_type: "WorkflowTaskCompleted".to_string(),
+                timestamp: workflow.start_time,
+                details: serde_json::json!({}),
+            },
         ];
+
+        let activity_types = [
+            "SendEmail",
+            "ProcessPayment",
+            "UpdateInventory",
+            "GenerateReport",
+            "ValidateInput",
+        ];
+
+        let num_activities = rng.gen_range(3..=5);
+        let mut event_id = 5_i64;
+
+        for i in 0..num_activities {
+            let activity_type = activity_types[i % activity_types.len()];
+            let scheduled_event_id = event_id;
+            let sched_time = workflow.start_time + Duration::seconds(rng.gen_range(1..30) + (i as i64) * 10);
+
+            // ActivityTaskScheduled
+            events.push(HistoryEvent {
+                event_id,
+                event_type: "ActivityTaskScheduled".to_string(),
+                timestamp: sched_time,
+                details: serde_json::json!({
+                    "activity_id": format!("{}", i + 1),
+                    "activity_type": activity_type,
+                    "task_queue": "default",
+                    "input": {"data": format!("input-for-{}", activity_type)},
+                }),
+            });
+            event_id += 1;
+
+            // Decide activity outcome
+            let outcome: u8 = match workflow.status {
+                WorkflowStatus::Running if i == num_activities - 1 => {
+                    // Last activity in a running workflow: 50% running, 50% pending
+                    if rng.gen_bool(0.5) { 1 } else { 0 } // 0=pending, 1=running
+                }
+                _ => rng.gen_range(2..=5), // 2=completed, 3=failed, 4=timedout, 5=canceled
+            };
+
+            if outcome == 0 {
+                // Pending: only scheduled, no started event
+                continue;
+            }
+
+            let start_time = sched_time + Duration::milliseconds(rng.gen_range(5..200));
+            let attempt: i32 = if outcome == 3 { rng.gen_range(1..=3) } else { 1 };
+
+            // ActivityTaskStarted
+            events.push(HistoryEvent {
+                event_id,
+                event_type: "ActivityTaskStarted".to_string(),
+                timestamp: start_time,
+                details: serde_json::json!({
+                    "scheduled_event_id": scheduled_event_id,
+                    "attempt": attempt,
+                    "identity": "mock-worker@host",
+                }),
+            });
+            let started_event_id = event_id;
+            event_id += 1;
+
+            if outcome == 1 {
+                // Running: started but no closed event
+                continue;
+            }
+
+            let close_time = start_time + Duration::milliseconds(rng.gen_range(100..5000));
+
+            match outcome {
+                2 => {
+                    // Completed
+                    events.push(HistoryEvent {
+                        event_id,
+                        event_type: "ActivityTaskCompleted".to_string(),
+                        timestamp: close_time,
+                        details: serde_json::json!({
+                            "scheduled_event_id": scheduled_event_id,
+                            "started_event_id": started_event_id,
+                            "result": {"success": true, "data": format!("result-{}", activity_type)},
+                            "identity": "mock-worker@host",
+                        }),
+                    });
+                }
+                3 => {
+                    // Failed
+                    events.push(HistoryEvent {
+                        event_id,
+                        event_type: "ActivityTaskFailed".to_string(),
+                        timestamp: close_time,
+                        details: serde_json::json!({
+                            "scheduled_event_id": scheduled_event_id,
+                            "started_event_id": started_event_id,
+                            "failure": {
+                                "message": format!("{} failed: mock error", activity_type),
+                                "failure_type": "ApplicationFailure",
+                                "stack_trace": "at mock.Worker.execute()\n  at line 42",
+                            },
+                            "identity": "mock-worker@host",
+                        }),
+                    });
+                }
+                4 => {
+                    // TimedOut
+                    events.push(HistoryEvent {
+                        event_id,
+                        event_type: "ActivityTaskTimedOut".to_string(),
+                        timestamp: close_time,
+                        details: serde_json::json!({
+                            "scheduled_event_id": scheduled_event_id,
+                            "started_event_id": started_event_id,
+                        }),
+                    });
+                }
+                _ => {
+                    // Canceled
+                    events.push(HistoryEvent {
+                        event_id,
+                        event_type: "ActivityTaskCanceled".to_string(),
+                        timestamp: close_time,
+                        details: serde_json::json!({
+                            "scheduled_event_id": scheduled_event_id,
+                            "started_event_id": started_event_id,
+                            "identity": "mock-worker@host",
+                        }),
+                    });
+                }
+            }
+            event_id += 1;
+        }
 
         Ok(events)
     }

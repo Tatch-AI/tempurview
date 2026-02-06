@@ -314,45 +314,53 @@ impl TemporalClient for GrpcTemporalClient {
         workflow_id: &str,
         run_id: Option<&str>,
     ) -> ClientResult<Vec<HistoryEvent>> {
-        let inner = GetWorkflowExecutionHistoryRequest {
-            namespace: self.namespace.clone(),
-            execution: Some(proto::temporal::api::common::v1::WorkflowExecution {
-                workflow_id: workflow_id.to_string(),
-                run_id: run_id.unwrap_or("").to_string(),
-            }),
-            maximum_page_size: 100,
-            next_page_token: vec![],
-            wait_new_event: false,
-            history_event_filter_type: 0, // HISTORY_EVENT_FILTER_TYPE_ALL_EVENT
-            skip_archival: false,
-        };
+        let mut all_events = Vec::new();
+        let mut next_page_token = vec![];
 
-        let response = self
-            .client
-            .clone()
-            .get_workflow_execution_history(self.make_request(inner))
-            .await
-            .map_err(grpc_error_to_client_error)?;
+        loop {
+            let inner = GetWorkflowExecutionHistoryRequest {
+                namespace: self.namespace.clone(),
+                execution: Some(proto::temporal::api::common::v1::WorkflowExecution {
+                    workflow_id: workflow_id.to_string(),
+                    run_id: run_id.unwrap_or("").to_string(),
+                }),
+                maximum_page_size: 200,
+                next_page_token: next_page_token.clone(),
+                wait_new_event: false,
+                history_event_filter_type: 0, // HISTORY_EVENT_FILTER_TYPE_ALL_EVENT
+                skip_archival: false,
+            };
 
-        let history = response.into_inner().history;
-        let events = history
-            .map(|h| {
-                h.events
-                    .into_iter()
-                    .map(|e| HistoryEvent {
+            let response = self
+                .client
+                .clone()
+                .get_workflow_execution_history(self.make_request(inner))
+                .await
+                .map_err(grpc_error_to_client_error)?;
+
+            let resp = response.into_inner();
+            if let Some(history) = resp.history {
+                for e in history.events {
+                    let details = extract_event_details(&e);
+                    all_events.push(HistoryEvent {
                         event_id: e.event_id,
-                        event_type: format!("{:?}", e.event_type),
+                        event_type: event_type_name(e.event_type),
                         timestamp: e
                             .event_time
                             .map(|t| timestamp_to_datetime(&t))
                             .unwrap_or_else(Utc::now),
-                        details: serde_json::json!({}),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                        details,
+                    });
+                }
+            }
 
-        Ok(events)
+            if resp.next_page_token.is_empty() {
+                break;
+            }
+            next_page_token = resp.next_page_token;
+        }
+
+        Ok(all_events)
     }
 
     async fn cancel(&self, workflow_id: &str, run_id: Option<&str>) -> ClientResult<()> {
@@ -517,6 +525,110 @@ fn payloads_to_json(payloads: &proto::temporal::api::common::v1::Payloads) -> se
         values.into_iter().next().unwrap()
     } else {
         serde_json::Value::Array(values)
+    }
+}
+
+/// Convert an event_type i32 to a human-readable name
+fn event_type_name(event_type: i32) -> String {
+    use proto::temporal::api::enums::v1::EventType;
+    match EventType::try_from(event_type) {
+        Ok(et) => format!("{:?}", et),
+        Err(_) => format!("Unknown({})", event_type),
+    }
+}
+
+/// Extract structured details JSON from a history event's attributes
+fn extract_event_details(
+    event: &proto::temporal::api::history::v1::HistoryEvent,
+) -> serde_json::Value {
+    use proto::temporal::api::history::v1::history_event::Attributes;
+
+    match &event.attributes {
+        Some(Attributes::ActivityTaskScheduledEventAttributes(attrs)) => {
+            serde_json::json!({
+                "activity_id": attrs.activity_id,
+                "activity_type": attrs.activity_type.as_ref().map(|t| &t.name),
+                "task_queue": attrs.task_queue.as_ref().map(|q| &q.name),
+                "input": attrs.input.as_ref().map(|p| payloads_to_json(p)),
+            })
+        }
+        Some(Attributes::ActivityTaskStartedEventAttributes(attrs)) => {
+            let mut json = serde_json::json!({
+                "scheduled_event_id": attrs.scheduled_event_id,
+                "attempt": attrs.attempt,
+                "identity": attrs.identity,
+            });
+            if let Some(ref f) = attrs.last_failure {
+                json["last_failure"] = serde_json::json!({
+                    "message": f.message,
+                });
+            }
+            json
+        }
+        Some(Attributes::ActivityTaskCompletedEventAttributes(attrs)) => {
+            serde_json::json!({
+                "scheduled_event_id": attrs.scheduled_event_id,
+                "started_event_id": attrs.started_event_id,
+                "result": attrs.result.as_ref().map(|p| payloads_to_json(p)),
+                "identity": attrs.identity,
+            })
+        }
+        Some(Attributes::ActivityTaskFailedEventAttributes(attrs)) => {
+            let mut json = serde_json::json!({
+                "scheduled_event_id": attrs.scheduled_event_id,
+                "started_event_id": attrs.started_event_id,
+                "retry_state": attrs.retry_state,
+                "identity": attrs.identity,
+            });
+            if let Some(ref f) = attrs.failure {
+                json["failure"] = serde_json::json!({
+                    "message": f.message,
+                    "failure_type": f.failure_info.as_ref().map(|info| match info {
+                        proto::temporal::api::failure::v1::failure::FailureInfo::ApplicationFailureInfo(_) => "ApplicationFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::TimeoutFailureInfo(_) => "TimeoutFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::CanceledFailureInfo(_) => "CanceledFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::TerminatedFailureInfo(_) => "TerminatedFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::ServerFailureInfo(_) => "ServerFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::ActivityFailureInfo(_) => "ActivityFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::ChildWorkflowExecutionFailureInfo(_) => "ChildWorkflowExecutionFailure",
+                        _ => "Unknown",
+                    }).unwrap_or("Unknown"),
+                    "stack_trace": if f.stack_trace.is_empty() { None } else { Some(&f.stack_trace) },
+                });
+            }
+            json
+        }
+        Some(Attributes::ActivityTaskTimedOutEventAttributes(attrs)) => {
+            let mut json = serde_json::json!({
+                "scheduled_event_id": attrs.scheduled_event_id,
+                "started_event_id": attrs.started_event_id,
+                "retry_state": attrs.retry_state,
+            });
+            if let Some(ref f) = attrs.failure {
+                json["failure"] = serde_json::json!({
+                    "message": f.message,
+                });
+            }
+            json
+        }
+        Some(Attributes::ActivityTaskCanceledEventAttributes(attrs)) => {
+            serde_json::json!({
+                "scheduled_event_id": attrs.scheduled_event_id,
+                "started_event_id": attrs.started_event_id,
+                "identity": attrs.identity,
+            })
+        }
+        Some(Attributes::ActivityTaskCancelRequestedEventAttributes(attrs)) => {
+            serde_json::json!({
+                "scheduled_event_id": attrs.scheduled_event_id,
+            })
+        }
+        _ => {
+            // For non-activity events, include the event type name as a minimal detail
+            serde_json::json!({
+                "event_type": event_type_name(event.event_type),
+            })
+        }
     }
 }
 

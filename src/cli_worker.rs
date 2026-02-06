@@ -42,6 +42,11 @@ pub enum CliRequest {
         filter: WorkflowFilter,
         limit: u32,
     },
+    /// Load workflow history events
+    LoadHistory {
+        workflow_id: String,
+        run_id: Option<String>,
+    },
 }
 
 /// Worker that processes CLI requests sequentially
@@ -105,6 +110,10 @@ impl CliWorker {
             CliRequest::LoadTypeStats { filter, limit } => {
                 self.load_type_stats(&filter, limit).await
             }
+            CliRequest::LoadHistory {
+                workflow_id,
+                run_id,
+            } => self.load_history(workflow_id, run_id).await,
         }
     }
 
@@ -196,6 +205,34 @@ impl CliWorker {
         }
     }
 
+    /// Load workflow history events
+    async fn load_history(&self, workflow_id: String, run_id: Option<String>) {
+        debug!("Loading history for workflow: {}", workflow_id);
+        match self
+            .client
+            .get_history(&workflow_id, run_id.as_deref())
+            .await
+        {
+            Ok(events) => {
+                debug!(
+                    "Loaded {} history events for workflow: {}",
+                    events.len(),
+                    workflow_id
+                );
+                let _ = self
+                    .action_tx
+                    .send(Action::DataLoaded(DataPayload::History(events)));
+            }
+            Err(e) => {
+                error!(
+                    "Failed to load history for workflow {}: {}",
+                    workflow_id, e
+                );
+                let _ = self.action_tx.send(Action::Error(e.to_string()));
+            }
+        }
+    }
+
     /// Cancel a running workflow
     async fn cancel_workflow(&self, workflow_id: String, run_id: Option<String>) {
         info!("Cancelling workflow: {}", workflow_id);
@@ -274,6 +311,14 @@ impl CliHandle {
     /// Load type statistics
     pub fn load_type_stats(&self, filter: WorkflowFilter, limit: u32) {
         let _ = self.send(CliRequest::LoadTypeStats { filter, limit });
+    }
+
+    /// Load workflow history
+    pub fn load_history(&self, workflow_id: String, run_id: Option<String>) {
+        let _ = self.send(CliRequest::LoadHistory {
+            workflow_id,
+            run_id,
+        });
     }
 
     /// Cancel a workflow

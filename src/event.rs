@@ -148,6 +148,7 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Enter => match view {
                     View::WorkflowList => Some(Action::ViewDetail),
                     View::TypeList => Some(Action::ViewDetail),
+                    View::ActivityList => Some(Action::ToggleActivityDetail),
                     View::WorkflowDetail => None,
                 },
                 KeyCode::Esc => Some(Action::GoBack),
@@ -188,6 +189,9 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 }
                 KeyCode::Char('t') if view == View::WorkflowDetail => {
                     Some(Action::TerminateWorkflow(String::new())) // ID filled in by app
+                }
+                KeyCode::Char('a') if view == View::WorkflowDetail => {
+                    Some(Action::ViewActivities)
                 }
                 KeyCode::Char('x') if view == View::WorkflowDetail => {
                     Some(Action::CopyWorkflowUrl)

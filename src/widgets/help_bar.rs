@@ -65,12 +65,20 @@ impl HelpBar {
             ],
             (View::WorkflowDetail, _) => vec![
                 ("Esc", "Back"),
+                ("a", "Activities"),
                 ("x", "Copy URL"),
                 ("gx", "Open URL"),
                 ("c", "Cancel"),
                 ("t", "Terminate"),
                 ("r", "Refresh"),
                 ("q", "Quit"),
+            ],
+            (View::ActivityList, _) => vec![
+                ("j/k", "Navigate"),
+                ("Enter", "Expand"),
+                ("Esc", "Back"),
+                ("r", "Refresh"),
+                ("?", "Help"),
             ],
         };
 
@@ -155,6 +163,11 @@ Column Visibility:
   F2          Toggle Type column
   F3          Toggle Workflow ID column
   F4          Toggle Started column
+
+Activities:
+  a           View activities (detail view)
+  Enter       Expand/collapse activity detail
+  Esc         Back to workflow detail
 
 Actions:
   r           Refresh data

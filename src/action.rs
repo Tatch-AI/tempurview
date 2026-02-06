@@ -1,5 +1,6 @@
 use crate::domain::{
-    DateRangePreset, StatusCounts, TypeStat, WorkflowDetail, WorkflowStatus, WorkflowSummary,
+    DateRangePreset, HistoryEvent, StatusCounts, TypeStat, WorkflowDetail, WorkflowStatus,
+    WorkflowSummary,
 };
 
 /// Table columns that can be toggled
@@ -45,7 +46,11 @@ pub enum Action {
     // View switching
     ViewDetail,
     ViewTypeList,
+    ViewActivities,
     GoBack,
+
+    // Activity view
+    ToggleActivityDetail,
 
     // Filtering
     SetStatusFilter(Option<WorkflowStatus>),
@@ -111,7 +116,9 @@ impl PartialEq for Action {
             (Action::PageDown, Action::PageDown) => true,
             (Action::ViewDetail, Action::ViewDetail) => true,
             (Action::ViewTypeList, Action::ViewTypeList) => true,
+            (Action::ViewActivities, Action::ViewActivities) => true,
             (Action::GoBack, Action::GoBack) => true,
+            (Action::ToggleActivityDetail, Action::ToggleActivityDetail) => true,
             (Action::SetStatusFilter(a), Action::SetStatusFilter(b)) => a == b,
             (Action::SetTypeFilter(a), Action::SetTypeFilter(b)) => a == b,
             (Action::NextStatusFilter, Action::NextStatusFilter) => true,
@@ -159,4 +166,5 @@ pub enum DataPayload {
     Workflows(Vec<WorkflowSummary>),
     Detail(Box<WorkflowDetail>),
     TypeStats(Vec<TypeStat>),
+    History(Vec<HistoryEvent>),
 }
