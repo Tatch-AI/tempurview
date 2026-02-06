@@ -1,6 +1,6 @@
-# Tempurview
+# TemPurview
 
-A CLI and TUI for viewing and managing [Temporal](https://temporal.io) workflows.
+A CLI and TUI for viewing and managing [Temporal](https://temporal.io) workflows. The name is a portmanteau of **Temporal** and **purview** — your window into what your workflows are doing.
 
 <!-- TODO: Add GIF/screenshot here -->
 
