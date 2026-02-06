@@ -256,3 +256,30 @@ TUI errors are caught and displayed without crashing.
 
 The split is intentional. A CLI tool should fail loudly.
 A TUI should be resilient.
+
+---
+
+## Proto Build Strategy
+
+```
+Dev machine (submodule present):
+  build.rs detects proto/temporal-api/
+  → tonic-build regenerates into src/proto/generated/
+  → commit the generated .rs files
+
+crates.io install (no submodule):
+  build.rs skips proto compilation
+  → uses checked-in src/proto/generated/*.rs
+  → zero protoc/proto dependency
+```
+
+**Why not ship .proto files?**
+- Saves ~2.5 MiB of raw protos from the package
+- Eliminates protoc system dependency for consumers
+- `cargo install tempurview` just works
+
+**To regenerate** (after updating proto submodule):
+```bash
+git submodule update --remote proto/temporal-api
+cargo build   # build.rs regenerates src/proto/generated/
+```

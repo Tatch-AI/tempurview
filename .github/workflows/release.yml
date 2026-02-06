@@ -20,7 +20,25 @@ jobs:
         with:
           node-version: 'lts/*'
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Create release
         run: npx autorel@^2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect new release tag
+        id: check_tag
+        run: |
+          TAG=$(git tag --points-at HEAD | grep '^v' | head -1)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to crates.io
+        if: steps.check_tag.outputs.tag != ''
+        run: |
+          VERSION="${{ steps.check_tag.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          sed -i "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
+          cargo publish --allow-dirty --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

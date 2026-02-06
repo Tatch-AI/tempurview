@@ -6,24 +6,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     set_git_version();
 
     let proto_root = PathBuf::from("proto/temporal-api");
+    let service_proto = proto_root.join("temporal/api/workflowservice/v1/service.proto");
 
-    // Tell Cargo to rerun if protos change
-    println!("cargo:rerun-if-changed=proto/temporal-api");
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    println!("cargo:rerun-if-changed=.git/refs/tags");
+    if service_proto.exists() {
+        // Dev mode: proto submodule present, regenerate into checked-in directory
+        println!("cargo:rerun-if-changed=proto/temporal-api");
 
-    // Compile the Temporal WorkflowService protos
-    tonic_build::configure()
-        .build_server(false) // We only need the client
-        .compile_protos(
-            &[
-                proto_root.join("temporal/api/workflowservice/v1/service.proto"),
-            ],
-            &[
-                // Include paths for proto resolution
-                proto_root.as_path(),
-            ],
-        )?;
+        let out_dir = PathBuf::from("src/proto/generated");
+        std::fs::create_dir_all(&out_dir)?;
+
+        tonic_build::configure()
+            .build_server(false)
+            .out_dir(&out_dir)
+            .compile_protos(
+                &[service_proto],
+                &[proto_root.as_path()],
+            )?;
+    }
+    // else: crates.io install — no proto submodule, use checked-in generated code
 
     Ok(())
 }
@@ -46,4 +46,6 @@ fn set_git_version() {
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
 
     println!("cargo:rustc-env=GIT_VERSION={}", version);
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/refs/tags");
 }

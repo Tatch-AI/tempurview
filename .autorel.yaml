@@ -8,5 +8,5 @@ branches:
 # Don't publish to npm (this is a Rust project)
 publish: false
 
-# Optional: Run tests before creating a release
-# pre-run: cargo test
+# Run tests before creating a release
+pre-run: cargo test --lib

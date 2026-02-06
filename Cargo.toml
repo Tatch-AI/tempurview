@@ -15,6 +15,7 @@ exclude = [
     "TESTING.md",
     "target/",
     ".github/",
+    "proto/",
 ]
 
 [dependencies]

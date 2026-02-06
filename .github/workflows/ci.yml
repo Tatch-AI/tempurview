@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # No submodules — validates the crates.io build path (pre-generated proto code)
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: cargo build
+
+      - run: cargo test --lib
+
+      - run: cargo publish --dry-run
