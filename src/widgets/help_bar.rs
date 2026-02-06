@@ -79,7 +79,6 @@ impl HelpBar {
             ],
             (View::ActivityList, _) => vec![
                 ("j/k", "Navigate"),
-                ("Enter", "Expand"),
                 ("Esc", "Back"),
                 ("r", "Refresh"),
                 ("?", "Help"),

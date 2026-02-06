@@ -475,7 +475,7 @@ fn render(app: &App, frame: &mut Frame) {
                     &app.activities,
                     &app.child_workflows,
                 )
-                .expanded(app.expanded_activity),
+                .expanded(app.activity_table_state.selected()),
                 layout[3],
                 &mut table_state,
             );

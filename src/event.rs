@@ -164,7 +164,7 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Enter => match view {
                     View::WorkflowList => Some(Action::ViewDetail),
                     View::TypeList => Some(Action::ViewDetail),
-                    View::ActivityList => Some(Action::ToggleActivityDetail),
+                    View::ActivityList => None,
                     View::EventLog => Some(Action::ViewEventDetail),
                     View::Insights => Some(Action::ViewInsightDetail),
                     View::InsightDetail => Some(Action::ViewDetail),
