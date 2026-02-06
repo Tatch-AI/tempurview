@@ -2,21 +2,20 @@ use crate::app::LoadState;
 use crate::domain::HistoryEvent;
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Rect},
     style::{Color, Modifier, Style, Stylize},
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    text::Span,
+    widgets::{Block, Borders, Paragraph, Row, StatefulWidget, Table, TableState, Widget},
 };
 
-/// Full-screen scrollable pager showing every history event chronologically
+/// Table view of all history events, selectable with j/k and Enter for drill-down
 pub struct EventLogWidget<'a> {
     events: &'a LoadState<Vec<HistoryEvent>>,
-    scroll: u16,
 }
 
 impl<'a> EventLogWidget<'a> {
-    pub fn new(events: &'a LoadState<Vec<HistoryEvent>>, scroll: u16) -> Self {
-        Self { events, scroll }
+    pub fn new(events: &'a LoadState<Vec<HistoryEvent>>) -> Self {
+        Self { events }
     }
 
     fn event_color(event_type: &str) -> Color {
@@ -35,56 +34,33 @@ impl<'a> EventLogWidget<'a> {
         }
     }
 
-    fn build_lines(events: &[HistoryEvent]) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-
-        for event in events {
-            let ts = event.timestamp.format("%H:%M:%S%.3f").to_string();
-            let color = Self::event_color(&event.event_type);
-
-            // Main line: [HH:MM:SS.mmm] #id EventTypeName
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("[{}] ", ts),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("#{:<4} ", event.event_id),
-                    Style::default().fg(Color::White).bold(),
-                ),
-                Span::styled(event.event_type.clone(), Style::default().fg(color)),
-            ]));
-
-            // Detail line with key-value pairs from details (skip internal *_event_id keys)
-            if let Some(obj) = event.details.as_object() {
-                let kvs: Vec<String> = obj
-                    .iter()
-                    .filter(|(k, _)| !k.ends_with("_event_id"))
-                    .filter(|(_, v)| !v.is_null())
-                    .map(|(k, v)| {
-                        let val_str = match v {
-                            serde_json::Value::String(s) => truncate(s, 60),
-                            other => truncate(&other.to_string(), 60),
-                        };
-                        format!("{}={}", k, val_str)
-                    })
-                    .collect();
-
-                if !kvs.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        format!("       {}", kvs.join("  ")),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-            }
+    /// Build a summary string from the first few non-null, non-event-id detail fields
+    fn summary(event: &HistoryEvent) -> String {
+        if let Some(obj) = event.details.as_object() {
+            let kvs: Vec<String> = obj
+                .iter()
+                .filter(|(k, _)| !k.ends_with("_event_id") && *k != "event_id")
+                .filter(|(_, v)| !v.is_null())
+                .take(3)
+                .map(|(k, v)| {
+                    let val_str = match v {
+                        serde_json::Value::String(s) => truncate(s, 40),
+                        other => truncate(&other.to_string(), 40),
+                    };
+                    format!("{}={}", k, val_str)
+                })
+                .collect();
+            kvs.join("  ")
+        } else {
+            String::new()
         }
-
-        lines
     }
 }
 
-impl Widget for EventLogWidget<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl StatefulWidget for EventLogWidget<'_> {
+    type State = TableState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut TableState) {
         match self.events {
             LoadState::Loaded(events) => {
                 let title = format!(" Event Log ({} events) ", events.len());
@@ -95,14 +71,49 @@ impl Widget for EventLogWidget<'_> {
                         Style::default().fg(Color::Cyan).bold(),
                     ));
 
-                let lines = Self::build_lines(events);
+                let header = Row::new(vec!["#", "Time", "Event Type", "Summary"])
+                    .style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .bottom_margin(0);
 
-                let paragraph = Paragraph::new(lines)
+                let rows: Vec<Row> = events
+                    .iter()
+                    .map(|event| {
+                        let ts = event.timestamp.format("%H:%M:%S%.3f").to_string();
+                        let color = Self::event_color(&event.event_type);
+                        let summary = Self::summary(event);
+
+                        Row::new(vec![
+                            format!("#{}", event.event_id),
+                            ts,
+                            event.event_type.clone(),
+                            summary,
+                        ])
+                        .style(Style::default().fg(color))
+                    })
+                    .collect();
+
+                let widths = [
+                    Constraint::Length(6),
+                    Constraint::Length(14),
+                    Constraint::Length(35),
+                    Constraint::Fill(1),
+                ];
+
+                let table = Table::new(rows, widths)
+                    .header(header)
                     .block(block)
-                    .wrap(Wrap { trim: false })
-                    .scroll((self.scroll, 0));
+                    .row_highlight_style(
+                        Style::default()
+                            .add_modifier(Modifier::REVERSED)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .highlight_symbol(">> ");
 
-                paragraph.render(area, buf);
+                StatefulWidget::render(table, area, buf, state);
             }
             LoadState::Loading => {
                 let loading = Paragraph::new("Loading event history...")

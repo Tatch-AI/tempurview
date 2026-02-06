@@ -15,7 +15,9 @@ pub struct HelpBar {
 impl HelpBar {
     pub fn for_view(view: View, input_mode: InputMode) -> Self {
         let shortcuts = match (view, input_mode) {
-            (_, InputMode::FilterInput) => vec![("Enter", "Apply"), ("Esc", "Cancel")],
+            (_, InputMode::FilterInput) | (_, InputMode::SearchInput) => {
+                vec![("Enter", "Apply"), ("Esc", "Cancel")]
+            }
             (_, InputMode::DateRangeSelect) => vec![
                 ("1", "1h"),
                 ("2", "6h"),
@@ -99,11 +101,19 @@ impl HelpBar {
                 ("?", "Help"),
             ],
             (View::EventLog, _) => vec![
+                ("j/k", "Navigate"),
+                ("Enter", "Details"),
+                ("Esc", "Back"),
+                ("r", "Refresh"),
+                ("?", "Help"),
+            ],
+            (View::EventDetail, _) => vec![
                 ("j/k", "Scroll"),
                 ("^D/^U", "Page"),
                 ("g/G", "Top/Bottom"),
+                ("/", "Search"),
+                ("n/N", "Next/Prev"),
                 ("Esc", "Back"),
-                ("r", "Refresh"),
                 ("?", "Help"),
             ],
         };
@@ -194,9 +204,17 @@ Column Visibility:
 
 Activities / Event Log:
   a           View activities (detail view)
-  l           View raw event log
-  Enter       Expand/collapse activity detail
+  l           View event log (table)
+  Enter       Expand activity / Event details
   Esc         Back to workflow detail
+
+Event Detail:
+  j/k         Scroll up/down
+  Ctrl+D/U    Half-page down/up
+  g/G         Top / Bottom
+  /           Search in JSON
+  n/N         Next / Previous match
+  Esc         Clear search / Go back
 
 Insight Detail:
   n           Next affected entity

@@ -11,8 +11,9 @@ use tempurview::event::{event_to_action, EventHandler};
 use tempurview::logging;
 use tempurview::tui::Tui;
 use tempurview::widgets::{
-    ActivityListWidget, EventLogWidget, FilterInput, HelpBar, HelpOverlay, InsightDetailWidget,
-    InsightsWidget, StatusDashboard, TypeListWidget, WorkflowDetailWidget, WorkflowListWidget,
+    ActivityListWidget, EventDetailWidget, EventLogWidget, FilterInput, HelpBar, HelpOverlay,
+    InsightDetailWidget, InsightsWidget, StatusDashboard, TypeListWidget, WorkflowDetailWidget,
+    WorkflowListWidget,
 };
 
 use ratatui::{
@@ -416,7 +417,11 @@ fn render(app: &App, frame: &mut Frame) {
     );
 
     // Render filter input
-    let filter_widget = if app.input_mode == InputMode::DateRangeCustom {
+    let filter_widget = if app.input_mode == InputMode::SearchInput {
+        FilterInput::new(&app.search_input)
+            .active(true)
+            .search_mode(true)
+    } else if app.input_mode == InputMode::DateRangeCustom {
         FilterInput::new(&app.date_range_input)
             .active(true)
             .date_mode(true)
@@ -476,10 +481,24 @@ fn render(app: &App, frame: &mut Frame) {
             );
         }
         View::EventLog => {
-            frame.render_widget(
-                EventLogWidget::new(&app.activity_events, app.event_log_scroll),
+            let mut table_state = app.event_log_table_state.clone();
+            frame.render_stateful_widget(
+                EventLogWidget::new(&app.activity_events),
                 layout[3],
+                &mut table_state,
             );
+        }
+        View::EventDetail => {
+            if let Some(event) = app.selected_event() {
+                frame.render_widget(
+                    EventDetailWidget::new(event, app.event_detail_scroll).search(
+                        app.search_query.as_deref(),
+                        app.search_current_match,
+                        app.search_match_lines.len(),
+                    ),
+                    layout[3],
+                );
+            }
         }
         View::Insights => {
             let mut table_state = app.insights_table_state.clone();
@@ -534,6 +553,7 @@ fn render_title(app: &App, frame: &mut Frame, area: Rect) {
         View::WorkflowDetail => "Workflow Detail",
         View::ActivityList => "Activities",
         View::EventLog => "Event Log",
+        View::EventDetail => "Event Detail",
         View::Insights => "Insights",
         View::InsightDetail => "Insight Detail",
     };

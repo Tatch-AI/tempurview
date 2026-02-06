@@ -107,6 +107,13 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
             KeyCode::Backspace => Some(Action::DeleteDateRangeChar),
             _ => None,
         },
+        InputMode::SearchInput => match key.code {
+            KeyCode::Enter => Some(Action::CloseSearchInput),
+            KeyCode::Esc => Some(Action::GoBack),
+            KeyCode::Char(c) => Some(Action::AppendSearchChar(c)),
+            KeyCode::Backspace => Some(Action::DeleteSearchChar),
+            _ => None,
+        },
         InputMode::PendingG => match key.code {
             KeyCode::Char('g') => Some(Action::NavigateTop),
             KeyCode::Char('x') if view == View::WorkflowDetail => Some(Action::OpenWorkflowUrl),
@@ -130,7 +137,10 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('k') | KeyCode::Up => Some(Action::NavigateUp),
                 KeyCode::Char('g') => Some(Action::EnterPendingG),
                 KeyCode::Char('G') => Some(Action::NavigateBottom),
-                KeyCode::Char('/') => Some(Action::OpenFilterInput),
+                KeyCode::Char('/') => match view {
+                    View::EventDetail => Some(Action::OpenSearchInput),
+                    _ => Some(Action::OpenFilterInput),
+                },
                 KeyCode::Char('r') => Some(Action::Refresh),
                 KeyCode::Char('?') => Some(Action::ToggleHelp),
                 KeyCode::PageUp => Some(Action::PageUp),
@@ -155,9 +165,10 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                     View::WorkflowList => Some(Action::ViewDetail),
                     View::TypeList => Some(Action::ViewDetail),
                     View::ActivityList => Some(Action::ToggleActivityDetail),
+                    View::EventLog => Some(Action::ViewEventDetail),
                     View::Insights => Some(Action::ViewInsightDetail),
                     View::InsightDetail => Some(Action::ViewDetail),
-                    View::WorkflowDetail | View::EventLog => None,
+                    View::WorkflowDetail | View::EventDetail => None,
                 },
                 KeyCode::Esc => Some(Action::GoBack),
                 // Status filter shortcuts (number keys)
@@ -203,6 +214,12 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 }
                 KeyCode::Char('l') if view == View::WorkflowDetail => {
                     Some(Action::ViewEventLog)
+                }
+                KeyCode::Char('n') if view == View::EventDetail => {
+                    Some(Action::NextSearchMatch)
+                }
+                KeyCode::Char('N') if view == View::EventDetail => {
+                    Some(Action::PrevSearchMatch)
                 }
                 KeyCode::Char('n') if view == View::InsightDetail => {
                     Some(Action::NextAffectedEntity)

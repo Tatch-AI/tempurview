@@ -60,6 +60,16 @@ pub enum Action {
 
     // Event log view
     ViewEventLog,
+    ViewEventDetail,
+
+    // Search (in detail views)
+    OpenSearchInput,
+    CloseSearchInput,
+    AppendSearchChar(char),
+    DeleteSearchChar,
+    NextSearchMatch,
+    PrevSearchMatch,
+    ClearSearch,
 
     // Filtering
     SetStatusFilter(Option<WorkflowStatus>),
@@ -133,6 +143,14 @@ impl PartialEq for Action {
             (Action::NextAffectedEntity, Action::NextAffectedEntity) => true,
             (Action::PrevAffectedEntity, Action::PrevAffectedEntity) => true,
             (Action::ViewEventLog, Action::ViewEventLog) => true,
+            (Action::ViewEventDetail, Action::ViewEventDetail) => true,
+            (Action::OpenSearchInput, Action::OpenSearchInput) => true,
+            (Action::CloseSearchInput, Action::CloseSearchInput) => true,
+            (Action::AppendSearchChar(a), Action::AppendSearchChar(b)) => a == b,
+            (Action::DeleteSearchChar, Action::DeleteSearchChar) => true,
+            (Action::NextSearchMatch, Action::NextSearchMatch) => true,
+            (Action::PrevSearchMatch, Action::PrevSearchMatch) => true,
+            (Action::ClearSearch, Action::ClearSearch) => true,
             (Action::SetStatusFilter(a), Action::SetStatusFilter(b)) => a == b,
             (Action::SetTypeFilter(a), Action::SetTypeFilter(b)) => a == b,
             (Action::NextStatusFilter, Action::NextStatusFilter) => true,

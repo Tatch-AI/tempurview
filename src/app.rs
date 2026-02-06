@@ -1,8 +1,9 @@
 use crate::action::{Action, DataPayload, TableColumn};
 use crate::domain::{
-    correlate_activities, correlate_child_workflows, parse_date_input, ActivityExecution,
-    ChildWorkflowExecution, HistoryEvent, InsightsResult, SortDirection, StatusCounts,
-    TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter, WorkflowStatus, WorkflowSummary,
+    correlate_activities, correlate_child_workflows, highlight_search_matches, json_to_lines,
+    parse_date_input, ActivityExecution, ChildWorkflowExecution, HistoryEvent, InsightsResult,
+    SortDirection, StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter,
+    WorkflowStatus, WorkflowSummary,
 };
 use ratatui::widgets::TableState;
 use std::collections::HashSet;
@@ -16,6 +17,7 @@ pub enum View {
     TypeList,
     ActivityList,
     EventLog,
+    EventDetail,
     Insights,
     InsightDetail,
 }
@@ -30,6 +32,8 @@ pub enum InputMode {
     DateRangeCustom,
     /// Waiting for second key after 'g' press (vim-style chord)
     PendingG,
+    /// Search input mode for detail views
+    SearchInput,
 }
 
 /// Loading state for async data
@@ -100,7 +104,16 @@ pub struct App {
     pub expanded_activity: Option<usize>,
 
     // EventLog state
-    pub event_log_scroll: u16,
+    pub event_log_table_state: TableState,
+
+    // EventDetail state
+    pub event_detail_scroll: u16,
+
+    // Search state (for detail views)
+    pub search_input: String,
+    pub search_query: Option<String>,
+    pub search_match_lines: Vec<usize>,
+    pub search_current_match: usize,
 
     // Insights state
     pub insights: LoadState<InsightsResult>,
@@ -165,7 +178,14 @@ impl App {
             activity_table_state: TableState::default().with_selected(0),
             expanded_activity: None,
 
-            event_log_scroll: 0,
+            event_log_table_state: TableState::default().with_selected(0),
+
+            event_detail_scroll: 0,
+
+            search_input: String::new(),
+            search_query: None,
+            search_match_lines: Vec::new(),
+            search_current_match: 0,
 
             insights: LoadState::NotLoaded,
             insights_table_state: TableState::default().with_selected(0),
@@ -310,7 +330,10 @@ impl App {
                 }
             }
             Action::GoBack => {
-                if self.input_mode == InputMode::PendingG {
+                if self.input_mode == InputMode::SearchInput {
+                    self.input_mode = InputMode::Normal;
+                    self.search_input.clear();
+                } else if self.input_mode == InputMode::PendingG {
                     self.input_mode = InputMode::Normal;
                 } else if self.input_mode == InputMode::DateRangeSelect {
                     self.input_mode = InputMode::Normal;
@@ -322,6 +345,20 @@ impl App {
                 } else if self.input_mode == InputMode::FilterInput {
                     self.input_mode = InputMode::Normal;
                     self.filter_input.clear();
+                } else if self.view == View::EventDetail {
+                    // First Esc clears search, second Esc goes back
+                    if self.search_query.is_some() {
+                        self.search_query = None;
+                        self.search_match_lines.clear();
+                        self.search_current_match = 0;
+                    } else if let Some(prev_view) = self.view_stack.pop() {
+                        self.event_detail_scroll = 0;
+                        self.search_input.clear();
+                        self.search_query = None;
+                        self.search_match_lines.clear();
+                        self.search_current_match = 0;
+                        self.view = prev_view;
+                    }
                 } else if let Some(prev_view) = self.view_stack.pop() {
                     if self.view == View::ActivityList {
                         self.activity_events = LoadState::NotLoaded;
@@ -329,7 +366,6 @@ impl App {
                         self.child_workflows.clear();
                         self.expanded_activity = None;
                     } else if self.view == View::EventLog {
-                        self.event_log_scroll = 0;
                         // Keep activity_events cached for quick re-entry
                     } else if self.view == View::InsightDetail {
                         self.insight_detail_scroll = 0;
@@ -486,7 +522,27 @@ impl App {
                         let wf_id = detail.summary.workflow_id.clone();
                         let run_id = Some(detail.summary.run_id.clone());
                         self.activity_events = LoadState::Loading;
-                        self.event_log_scroll = 0;
+                        self.event_log_table_state.select(Some(0));
+                        return vec![Effect::LoadHistory(wf_id, run_id)];
+                    }
+                    return vec![];
+                }
+                if self.view == View::EventDetail {
+                    // Pop back to EventLog, then reload history
+                    if let Some(prev) = self.view_stack.pop() {
+                        self.view = prev;
+                    } else {
+                        self.view = View::EventLog;
+                    }
+                    self.event_detail_scroll = 0;
+                    self.search_query = None;
+                    self.search_match_lines.clear();
+                    self.search_current_match = 0;
+                    if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
+                        let wf_id = detail.summary.workflow_id.clone();
+                        let run_id = Some(detail.summary.run_id.clone());
+                        self.activity_events = LoadState::Loading;
+                        self.event_log_table_state.select(Some(0));
                         return vec![Effect::LoadHistory(wf_id, run_id)];
                     }
                     return vec![];
@@ -631,7 +687,7 @@ impl App {
                 // Enter event log view reusing already-loaded history or loading fresh
                 self.view_stack.push(self.view);
                 self.view = View::EventLog;
-                self.event_log_scroll = 0;
+                self.event_log_table_state.select(Some(0));
                 if self.activity_events.is_loaded() {
                     vec![]
                 } else if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
@@ -643,6 +699,80 @@ impl App {
                     self.last_error = Some("No workflow loaded".to_string());
                     vec![]
                 }
+            }
+            Action::ViewEventDetail => {
+                // Enter from EventLog → full-screen event detail
+                if let LoadState::Loaded(ref events) = self.activity_events {
+                    if let Some(selected) = self.event_log_table_state.selected() {
+                        if selected < events.len() {
+                            self.view_stack.push(self.view);
+                            self.view = View::EventDetail;
+                            self.event_detail_scroll = 0;
+                            self.search_input.clear();
+                            self.search_query = None;
+                            self.search_match_lines.clear();
+                            self.search_current_match = 0;
+                        }
+                    }
+                }
+                vec![]
+            }
+            Action::OpenSearchInput => {
+                self.input_mode = InputMode::SearchInput;
+                self.search_input.clear();
+                vec![]
+            }
+            Action::CloseSearchInput => {
+                self.input_mode = InputMode::Normal;
+                if !self.search_input.is_empty() {
+                    self.search_query = Some(self.search_input.clone());
+                    self.recompute_search_matches();
+                    // Scroll to first match
+                    if !self.search_match_lines.is_empty() {
+                        self.search_current_match = 0;
+                        self.event_detail_scroll = self.search_match_lines[0] as u16;
+                    }
+                } else {
+                    self.search_query = None;
+                    self.search_match_lines.clear();
+                    self.search_current_match = 0;
+                }
+                vec![]
+            }
+            Action::AppendSearchChar(c) => {
+                self.search_input.push(c);
+                vec![]
+            }
+            Action::DeleteSearchChar => {
+                self.search_input.pop();
+                vec![]
+            }
+            Action::NextSearchMatch => {
+                if !self.search_match_lines.is_empty() {
+                    self.search_current_match =
+                        (self.search_current_match + 1) % self.search_match_lines.len();
+                    self.event_detail_scroll =
+                        self.search_match_lines[self.search_current_match] as u16;
+                }
+                vec![]
+            }
+            Action::PrevSearchMatch => {
+                if !self.search_match_lines.is_empty() {
+                    self.search_current_match = if self.search_current_match == 0 {
+                        self.search_match_lines.len() - 1
+                    } else {
+                        self.search_current_match - 1
+                    };
+                    self.event_detail_scroll =
+                        self.search_match_lines[self.search_current_match] as u16;
+                }
+                vec![]
+            }
+            Action::ClearSearch => {
+                self.search_query = None;
+                self.search_match_lines.clear();
+                self.search_current_match = 0;
+                vec![]
             }
             Action::ViewTypeList => {
                 self.view_stack.push(self.view);
@@ -856,6 +986,15 @@ impl App {
                             self.activity_table_state
                                 .select(Some(combined_len - 1));
                         }
+                        // Bounds check for event log table
+                        if let LoadState::Loaded(ref evts) = self.activity_events {
+                            let el_selected =
+                                self.event_log_table_state.selected().unwrap_or(0);
+                            if el_selected >= evts.len() && !evts.is_empty() {
+                                self.event_log_table_state
+                                    .select(Some(evts.len() - 1));
+                            }
+                        }
                     }
                     DataPayload::Insights(result) => {
                         self.insights = LoadState::Loaded(result);
@@ -971,6 +1110,7 @@ impl App {
         match self.view {
             View::TypeList => &mut self.type_table_state,
             View::ActivityList => &mut self.activity_table_state,
+            View::EventLog => &mut self.event_log_table_state,
             View::Insights | View::InsightDetail => &mut self.insights_table_state,
             _ => &mut self.table_state,
         }
@@ -979,7 +1119,7 @@ impl App {
     fn current_scroll_mut(&mut self) -> Option<&mut u16> {
         match self.view {
             View::InsightDetail => Some(&mut self.insight_detail_scroll),
-            View::EventLog => Some(&mut self.event_log_scroll),
+            View::EventDetail => Some(&mut self.event_detail_scroll),
             _ => None,
         }
     }
@@ -994,7 +1134,14 @@ impl App {
                 }
             }
             View::ActivityList => self.activities.len() + self.child_workflows.len(),
-            View::InsightDetail | View::EventLog => 0,
+            View::EventLog => {
+                if let LoadState::Loaded(ref events) = self.activity_events {
+                    events.len()
+                } else {
+                    0
+                }
+            }
+            View::InsightDetail | View::EventDetail => 0,
             View::Insights => {
                 if let LoadState::Loaded(ref result) = self.insights {
                     result.findings.len()
@@ -1116,6 +1263,38 @@ impl App {
         } else {
             None
         }
+    }
+
+    /// Get the currently selected event from the event log
+    pub fn selected_event(&self) -> Option<&HistoryEvent> {
+        if let LoadState::Loaded(ref events) = self.activity_events {
+            self.event_log_table_state
+                .selected()
+                .and_then(|i| events.get(i))
+        } else {
+            None
+        }
+    }
+
+    /// Recompute search match lines for the current event detail
+    fn recompute_search_matches(&mut self) {
+        if let Some(ref query) = self.search_query {
+            if let Some(event) = self.selected_event_cloned() {
+                let lines = json_to_lines(&event.details);
+                let (_, indices) = highlight_search_matches(&lines, query);
+                self.search_match_lines = indices;
+                self.search_current_match = 0;
+            }
+        } else {
+            self.search_match_lines.clear();
+            self.search_current_match = 0;
+        }
+    }
+
+    /// Helper to get a cloned event (needed because we can't borrow self immutably
+    /// while also borrowing mutably for search state)
+    fn selected_event_cloned(&self) -> Option<HistoryEvent> {
+        self.selected_event().cloned()
     }
 }
 

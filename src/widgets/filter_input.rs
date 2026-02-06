@@ -78,7 +78,7 @@ impl Widget for FilterInput<'_> {
         let title: &str = if self.is_date_mode {
             "Date range (e.g. 2h, 3d, 1w, 2024-01-15) — Enter to apply, Esc to cancel"
         } else if self.is_search_mode {
-            "Search types (Enter to apply, Esc to cancel)"
+            "Search (Enter to apply, Esc to cancel)"
         } else if self.is_active {
             "Filter (Enter to apply, Esc to cancel)"
         } else {
