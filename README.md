@@ -17,7 +17,11 @@
 
 ---
 
-<!-- TODO: Add hero GIF/screenshot (vhs or asciinema recording) -->
+<p align="center">
+  <img src="static/tpv-tui-mock-data-demo.gif" alt="TemPurview TUI demo" width="800">
+</p>
+
+<!-- TODO: Add CLI demo GIF (insight scan, workflow list, jq piping) -->
 
 ## Why TemPurview?
 
