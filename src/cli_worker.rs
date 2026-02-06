@@ -53,7 +53,10 @@ pub enum CliRequest {
         run_id: Option<String>,
     },
     /// Run insights scan (list + sample histories + compute findings)
-    LoadInsights,
+    LoadInsights {
+        filter: WorkflowFilter,
+        limit: u32,
+    },
 }
 
 /// Worker that processes CLI requests sequentially
@@ -121,7 +124,9 @@ impl CliWorker {
                 workflow_id,
                 run_id,
             } => self.load_history(workflow_id, run_id).await,
-            CliRequest::LoadInsights => self.load_insights().await,
+            CliRequest::LoadInsights { filter, limit } => {
+                self.load_insights(&filter, limit).await
+            }
         }
     }
 
@@ -242,12 +247,25 @@ impl CliWorker {
     }
 
     /// Run insights scan: list workflows, compute list-level findings, sample histories, compute activity-level findings
-    async fn load_insights(&self) {
-        info!("CliWorker: Starting insights scan");
+    async fn load_insights(&self, filter: &WorkflowFilter, limit: u32) {
+        info!(
+            "CliWorker: Starting insights scan (limit={}, has_date_range={})",
+            limit,
+            filter.has_date_range()
+        );
         let scan_start = Utc::now();
 
+        // Build a date-only filter (ignore status/type/id filters)
+        let date_filter = WorkflowFilter {
+            start_time_after: filter.start_time_after,
+            start_time_before: filter.start_time_before,
+            close_time_after: filter.close_time_after,
+            close_time_before: filter.close_time_before,
+            ..WorkflowFilter::new()
+        };
+
         // Step 1: Fetch workflows (fleet-level summary)
-        let workflows = match self.client.list(&WorkflowFilter::new(), 500).await {
+        let workflows = match self.client.list(&date_filter, limit).await {
             Ok(wfs) => wfs,
             Err(e) => {
                 error!("CliWorker: Failed to fetch workflows for insights: {}", e);
@@ -408,8 +426,8 @@ impl CliHandle {
     }
 
     /// Run insights scan
-    pub fn load_insights(&self) {
-        let _ = self.send(CliRequest::LoadInsights);
+    pub fn load_insights(&self, filter: WorkflowFilter, limit: u32) {
+        let _ = self.send(CliRequest::LoadInsights { filter, limit });
     }
 
     /// Cancel a workflow

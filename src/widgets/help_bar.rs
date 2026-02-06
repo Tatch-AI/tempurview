@@ -83,9 +83,16 @@ impl HelpBar {
             ],
             (View::Insights, _) => vec![
                 ("j/k", "Navigate"),
-                ("Enter", "Expand"),
+                ("Enter", "Details"),
                 ("Esc", "Back"),
                 ("r", "Re-scan"),
+                ("?", "Help"),
+            ],
+            (View::InsightDetail, _) => vec![
+                ("j/k", "Scroll"),
+                ("^D/^U", "Page"),
+                ("g/G", "Top/Bottom"),
+                ("Esc", "Back"),
                 ("?", "Help"),
             ],
         };
@@ -135,6 +142,7 @@ Navigation:
   k / ↑       Move up
   g / Home    Go to top
   G / End     Go to bottom
+  Ctrl+D/U    Half-page down/up
   PgUp/PgDn   Page up/down
 
 Views:

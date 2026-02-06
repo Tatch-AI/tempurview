@@ -1,6 +1,7 @@
 pub mod activity_list;
 pub mod filter_input;
 pub mod help_bar;
+pub mod insight_detail;
 pub mod insights;
 pub mod status_dashboard;
 pub mod type_list;
@@ -10,6 +11,7 @@ pub mod workflow_list;
 pub use activity_list::*;
 pub use filter_input::*;
 pub use help_bar::*;
+pub use insight_detail::*;
 pub use insights::*;
 pub use status_dashboard::*;
 pub use type_list::*;

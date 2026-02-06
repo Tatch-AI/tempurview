@@ -54,7 +54,7 @@ pub enum Action {
 
     // Insights view
     ViewInsights,
-    ToggleInsightDetail,
+    ViewInsightDetail,
 
     // Filtering
     SetStatusFilter(Option<WorkflowStatus>),
@@ -124,7 +124,7 @@ impl PartialEq for Action {
             (Action::GoBack, Action::GoBack) => true,
             (Action::ToggleActivityDetail, Action::ToggleActivityDetail) => true,
             (Action::ViewInsights, Action::ViewInsights) => true,
-            (Action::ToggleInsightDetail, Action::ToggleInsightDetail) => true,
+            (Action::ViewInsightDetail, Action::ViewInsightDetail) => true,
             (Action::SetStatusFilter(a), Action::SetStatusFilter(b)) => a == b,
             (Action::SetTypeFilter(a), Action::SetTypeFilter(b)) => a == b,
             (Action::NextStatusFilter, Action::NextStatusFilter) => true,

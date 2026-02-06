@@ -16,6 +16,7 @@ pub enum View {
     TypeList,
     ActivityList,
     Insights,
+    InsightDetail,
 }
 
 /// Input mode
@@ -99,7 +100,7 @@ pub struct App {
     // Insights state
     pub insights: LoadState<InsightsResult>,
     pub insights_table_state: TableState,
-    pub expanded_insight: Option<usize>,
+    pub insight_detail_scroll: u16,
 
     // Config
     pub temporal_namespace: String,
@@ -159,7 +160,7 @@ impl App {
 
             insights: LoadState::NotLoaded,
             insights_table_state: TableState::default().with_selected(0),
-            expanded_insight: None,
+            insight_detail_scroll: 0,
 
             temporal_namespace: String::new(),
 
@@ -189,30 +190,58 @@ impl App {
 
         match action {
             Action::NavigateUp => {
-                self.select_previous();
-                vec![]
-            }
-            Action::NavigateDown => {
-                self.select_next();
-                vec![]
-            }
-            Action::NavigateTop => {
-                self.select_first();
-                vec![]
-            }
-            Action::NavigateBottom => {
-                self.select_last();
-                vec![]
-            }
-            Action::PageUp => {
-                for _ in 0..self.page_size {
+                if self.view == View::InsightDetail {
+                    self.insight_detail_scroll = self.insight_detail_scroll.saturating_sub(1);
+                } else {
                     self.select_previous();
                 }
                 vec![]
             }
-            Action::PageDown => {
-                for _ in 0..self.page_size {
+            Action::NavigateDown => {
+                if self.view == View::InsightDetail {
+                    self.insight_detail_scroll = self.insight_detail_scroll.saturating_add(1);
+                } else {
                     self.select_next();
+                }
+                vec![]
+            }
+            Action::NavigateTop => {
+                if self.view == View::InsightDetail {
+                    self.insight_detail_scroll = 0;
+                } else {
+                    self.select_first();
+                }
+                vec![]
+            }
+            Action::NavigateBottom => {
+                if self.view == View::InsightDetail {
+                    self.insight_detail_scroll = u16::MAX;
+                } else {
+                    self.select_last();
+                }
+                vec![]
+            }
+            Action::PageUp => {
+                if self.view == View::InsightDetail {
+                    self.insight_detail_scroll = self
+                        .insight_detail_scroll
+                        .saturating_sub(self.page_size as u16);
+                } else {
+                    for _ in 0..self.page_size {
+                        self.select_previous();
+                    }
+                }
+                vec![]
+            }
+            Action::PageDown => {
+                if self.view == View::InsightDetail {
+                    self.insight_detail_scroll = self
+                        .insight_detail_scroll
+                        .saturating_add(self.page_size as u16);
+                } else {
+                    for _ in 0..self.page_size {
+                        self.select_next();
+                    }
                 }
                 vec![]
             }
@@ -266,9 +295,10 @@ impl App {
                         self.activity_events = LoadState::NotLoaded;
                         self.activities.clear();
                         self.expanded_activity = None;
+                    } else if self.view == View::InsightDetail {
+                        self.insight_detail_scroll = 0;
                     } else if self.view == View::Insights {
                         // Keep cached insights data for quick re-entry
-                        self.expanded_insight = None;
                     } else {
                         self.selected_workflow = None;
                     }
@@ -413,12 +443,20 @@ impl App {
                     }
                     return vec![];
                 }
-                if self.view == View::Insights {
+                if self.view == View::Insights || self.view == View::InsightDetail {
                     // Re-run the insights scan
                     self.insights = LoadState::Loading;
                     self.insights_table_state.select(Some(0));
-                    self.expanded_insight = None;
-                    return vec![Effect::LoadInsights];
+                    self.insight_detail_scroll = 0;
+                    // If in detail view, go back to list
+                    if self.view == View::InsightDetail {
+                        if let Some(prev) = self.view_stack.pop() {
+                            self.view = prev;
+                        } else {
+                            self.view = View::Insights;
+                        }
+                    }
+                    return vec![self.load_insights_effect()];
                 }
                 let mut effects = vec![Effect::LoadCounts, Effect::LoadWorkflows];
                 self.status_counts = LoadState::Loading;
@@ -489,18 +527,15 @@ impl App {
                 self.view = View::Insights;
                 self.insights = LoadState::Loading;
                 self.insights_table_state.select(Some(0));
-                self.expanded_insight = None;
-                vec![Effect::LoadInsights]
+                vec![self.load_insights_effect()]
             }
-            Action::ToggleInsightDetail => {
+            Action::ViewInsightDetail => {
                 if let LoadState::Loaded(ref result) = self.insights {
                     if let Some(selected) = self.insights_table_state.selected() {
                         if selected < result.findings.len() {
-                            if self.expanded_insight == Some(selected) {
-                                self.expanded_insight = None;
-                            } else {
-                                self.expanded_insight = Some(selected);
-                            }
+                            self.view_stack.push(self.view);
+                            self.view = View::InsightDetail;
+                            self.insight_detail_scroll = 0;
                         }
                     }
                 }
@@ -767,6 +802,19 @@ impl App {
         }
     }
 
+    /// Build a LoadInsights effect using the current filter state
+    fn load_insights_effect(&self) -> Effect {
+        let limit = if self.filter.has_date_range() {
+            1000
+        } else {
+            500
+        };
+        Effect::LoadInsights {
+            filter: self.filter.clone(),
+            limit,
+        }
+    }
+
     /// Return the appropriate reload effects based on the current view
     fn date_range_reload_effects(&self) -> Vec<Effect> {
         if self.view == View::TypeList {
@@ -817,7 +865,7 @@ impl App {
         match self.view {
             View::TypeList => &mut self.type_table_state,
             View::ActivityList => &mut self.activity_table_state,
-            View::Insights => &mut self.insights_table_state,
+            View::Insights | View::InsightDetail => &mut self.insights_table_state,
             _ => &mut self.table_state,
         }
     }
@@ -832,6 +880,7 @@ impl App {
                 }
             }
             View::ActivityList => self.activities.len(),
+            View::InsightDetail => 0,
             View::Insights => {
                 if let LoadState::Loaded(ref result) = self.insights {
                     result.findings.len()
@@ -964,7 +1013,10 @@ pub enum Effect {
     LoadWorkflowDetail(String),
     LoadTypeStats,
     LoadHistory(String, Option<String>),
-    LoadInsights,
+    LoadInsights {
+        filter: WorkflowFilter,
+        limit: u32,
+    },
     CancelWorkflow(String),
     TerminateWorkflow(String),
     CopyToClipboard(String),

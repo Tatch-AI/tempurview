@@ -114,11 +114,14 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
             _ => Some(Action::CancelPendingG),
         },
         InputMode::Normal => {
-            // Check for Ctrl+C first
+            // Check for Ctrl key combos first
             if key.modifiers.contains(KeyModifiers::CONTROL) {
-                if let KeyCode::Char('c') = key.code {
-                    return Some(Action::Quit);
-                }
+                return match key.code {
+                    KeyCode::Char('c') => Some(Action::Quit),
+                    KeyCode::Char('d') => Some(Action::PageDown),
+                    KeyCode::Char('u') => Some(Action::PageUp),
+                    _ => None,
+                };
             }
 
             match key.code {
@@ -152,7 +155,8 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                     View::WorkflowList => Some(Action::ViewDetail),
                     View::TypeList => Some(Action::ViewDetail),
                     View::ActivityList => Some(Action::ToggleActivityDetail),
-                    View::Insights => Some(Action::ToggleInsightDetail),
+                    View::Insights => Some(Action::ViewInsightDetail),
+                    View::InsightDetail => None,
                     View::WorkflowDetail => None,
                 },
                 KeyCode::Esc => Some(Action::GoBack),
@@ -308,5 +312,28 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
         assert_eq!(action, Some(Action::Quit));
+    }
+
+    #[test]
+    fn test_ctrl_d_pages_down() {
+        let key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
+        assert_eq!(action, Some(Action::PageDown));
+    }
+
+    #[test]
+    fn test_ctrl_u_pages_up() {
+        let key = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
+        assert_eq!(action, Some(Action::PageUp));
+    }
+
+    #[test]
+    fn test_ctrl_d_overrides_plain_d() {
+        // Ctrl+D should page down, not enter date range mode
+        let key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        let action = key_to_action(key, View::WorkflowList, InputMode::Normal);
+        assert_eq!(action, Some(Action::PageDown));
+        assert_ne!(action, Some(Action::EnterDateRangeMode));
     }
 }
