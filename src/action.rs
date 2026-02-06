@@ -51,6 +51,7 @@ pub enum Action {
 
     // Activity view
     ToggleActivityDetail,
+    ViewActivityDetail,
 
     // Insights view
     ViewInsights,
@@ -138,6 +139,7 @@ impl PartialEq for Action {
             (Action::ViewActivities, Action::ViewActivities) => true,
             (Action::GoBack, Action::GoBack) => true,
             (Action::ToggleActivityDetail, Action::ToggleActivityDetail) => true,
+            (Action::ViewActivityDetail, Action::ViewActivityDetail) => true,
             (Action::ViewInsights, Action::ViewInsights) => true,
             (Action::ViewInsightDetail, Action::ViewInsightDetail) => true,
             (Action::NextAffectedEntity, Action::NextAffectedEntity) => true,

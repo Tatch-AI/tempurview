@@ -145,8 +145,11 @@ fn load_insights_config() -> InsightsConfig {
         Some(d) => d.join("config.toml"),
         None => return InsightsConfig::default(),
     };
+    load_insights_config_from(&path)
+}
 
-    let content = match std::fs::read_to_string(&path) {
+fn load_insights_config_from(path: &std::path::Path) -> InsightsConfig {
+    let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return InsightsConfig::default(),
     };
@@ -189,8 +192,9 @@ mod tests {
 
     #[test]
     fn test_load_insights_config_missing_file() {
-        // load_insights_config gracefully returns default when file is missing
-        let config = load_insights_config();
+        // load_insights_config_from gracefully returns default when file is missing
+        let path = std::path::Path::new("/tmp/tempurview_test_nonexistent/config.toml");
+        let config = load_insights_config_from(path);
         assert!(config.allowlist.is_empty());
     }
 

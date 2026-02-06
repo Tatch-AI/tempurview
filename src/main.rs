@@ -10,10 +10,11 @@ use tempurview::domain::WorkflowStatus;
 use tempurview::event::{event_to_action, EventHandler};
 use tempurview::logging;
 use tempurview::tui::Tui;
+use tempurview::app::TimelineItemRef;
 use tempurview::widgets::{
-    ActivityListWidget, EventDetailWidget, EventLogWidget, FilterInput, HelpBar, HelpOverlay,
-    InsightDetailWidget, InsightsWidget, StatusDashboard, TypeListWidget, WorkflowDetailWidget,
-    WorkflowListWidget,
+    ActivityDetailWidget, ActivityListWidget, EventDetailWidget, EventLogWidget, FilterInput,
+    HelpBar, HelpOverlay, InsightDetailWidget, InsightsWidget, StatusDashboard, TypeListWidget,
+    WorkflowDetailWidget, WorkflowListWidget,
 };
 
 use ratatui::{
@@ -480,6 +481,26 @@ fn render(app: &App, frame: &mut Frame) {
                 &mut table_state,
             );
         }
+        View::ActivityDetail => {
+            if let Some(item) = app.selected_timeline_item() {
+                let widget = match item {
+                    TimelineItemRef::Activity(a) => {
+                        ActivityDetailWidget::from_activity(a, app.activity_detail_scroll)
+                    }
+                    TimelineItemRef::ChildWorkflow(cw) => {
+                        ActivityDetailWidget::from_child_workflow(cw, app.activity_detail_scroll)
+                    }
+                };
+                frame.render_widget(
+                    widget.search(
+                        app.search_query.as_deref(),
+                        app.search_current_match,
+                        app.search_match_lines.len(),
+                    ),
+                    layout[3],
+                );
+            }
+        }
         View::EventLog => {
             let mut table_state = app.event_log_table_state.clone();
             frame.render_stateful_widget(
@@ -552,6 +573,7 @@ fn render_title(app: &App, frame: &mut Frame, area: Rect) {
         View::TypeList => "Workflow Types",
         View::WorkflowDetail => "Workflow Detail",
         View::ActivityList => "Activities",
+        View::ActivityDetail => "Activity Detail",
         View::EventLog => "Event Log",
         View::EventDetail => "Event Detail",
         View::Insights => "Insights",

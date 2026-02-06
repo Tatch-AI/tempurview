@@ -9,6 +9,12 @@ use ratatui::widgets::TableState;
 use std::collections::HashSet;
 use std::time::Instant;
 
+/// Reference to a timeline item (activity or child workflow) for the detail view
+pub enum TimelineItemRef<'a> {
+    Activity(&'a ActivityExecution),
+    ChildWorkflow(&'a ChildWorkflowExecution),
+}
+
 /// Which view is currently active
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -16,6 +22,7 @@ pub enum View {
     WorkflowDetail,
     TypeList,
     ActivityList,
+    ActivityDetail,
     EventLog,
     EventDetail,
     Insights,
@@ -103,6 +110,9 @@ pub struct App {
     pub activity_table_state: TableState,
     pub expanded_activity: Option<usize>,
 
+    // ActivityDetail state
+    pub activity_detail_scroll: u16,
+
     // EventLog state
     pub event_log_table_state: TableState,
 
@@ -177,6 +187,8 @@ impl App {
             child_workflows: Vec::new(),
             activity_table_state: TableState::default().with_selected(0),
             expanded_activity: None,
+
+            activity_detail_scroll: 0,
 
             event_log_table_state: TableState::default().with_selected(0),
 
@@ -345,6 +357,20 @@ impl App {
                 } else if self.input_mode == InputMode::FilterInput {
                     self.input_mode = InputMode::Normal;
                     self.filter_input.clear();
+                } else if self.view == View::ActivityDetail {
+                    // First Esc clears search, second Esc goes back
+                    if self.search_query.is_some() {
+                        self.search_query = None;
+                        self.search_match_lines.clear();
+                        self.search_current_match = 0;
+                    } else if let Some(prev_view) = self.view_stack.pop() {
+                        self.activity_detail_scroll = 0;
+                        self.search_input.clear();
+                        self.search_query = None;
+                        self.search_match_lines.clear();
+                        self.search_current_match = 0;
+                        self.view = prev_view;
+                    }
                 } else if self.view == View::EventDetail {
                     // First Esc clears search, second Esc goes back
                     if self.search_query.is_some() {
@@ -527,6 +553,28 @@ impl App {
                     }
                     return vec![];
                 }
+                if self.view == View::ActivityDetail {
+                    // Pop back to ActivityList, then reload history
+                    if let Some(prev) = self.view_stack.pop() {
+                        self.view = prev;
+                    } else {
+                        self.view = View::ActivityList;
+                    }
+                    self.activity_detail_scroll = 0;
+                    self.search_query = None;
+                    self.search_match_lines.clear();
+                    self.search_current_match = 0;
+                    if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
+                        let wf_id = detail.summary.workflow_id.clone();
+                        let run_id = Some(detail.summary.run_id.clone());
+                        self.activity_events = LoadState::Loading;
+                        self.activities.clear();
+                        self.child_workflows.clear();
+                        self.expanded_activity = None;
+                        return vec![Effect::LoadHistory(wf_id, run_id)];
+                    }
+                    return vec![];
+                }
                 if self.view == View::EventDetail {
                     // Pop back to EventLog, then reload history
                     if let Some(prev) = self.view_stack.pop() {
@@ -625,6 +673,18 @@ impl App {
                             self.expanded_activity = Some(selected);
                         }
                     }
+                }
+                vec![]
+            }
+            Action::ViewActivityDetail => {
+                if self.selected_timeline_item().is_some() {
+                    self.view_stack.push(self.view);
+                    self.view = View::ActivityDetail;
+                    self.activity_detail_scroll = 0;
+                    self.search_input.clear();
+                    self.search_query = None;
+                    self.search_match_lines.clear();
+                    self.search_current_match = 0;
                 }
                 vec![]
             }
@@ -730,7 +790,12 @@ impl App {
                     // Scroll to first match
                     if !self.search_match_lines.is_empty() {
                         self.search_current_match = 0;
-                        self.event_detail_scroll = self.search_match_lines[0] as u16;
+                        let scroll_target = self.search_match_lines[0] as u16;
+                        if self.view == View::ActivityDetail {
+                            self.activity_detail_scroll = scroll_target;
+                        } else {
+                            self.event_detail_scroll = scroll_target;
+                        }
                     }
                 } else {
                     self.search_query = None;
@@ -751,8 +816,13 @@ impl App {
                 if !self.search_match_lines.is_empty() {
                     self.search_current_match =
                         (self.search_current_match + 1) % self.search_match_lines.len();
-                    self.event_detail_scroll =
+                    let scroll_target =
                         self.search_match_lines[self.search_current_match] as u16;
+                    if self.view == View::ActivityDetail {
+                        self.activity_detail_scroll = scroll_target;
+                    } else {
+                        self.event_detail_scroll = scroll_target;
+                    }
                 }
                 vec![]
             }
@@ -763,8 +833,13 @@ impl App {
                     } else {
                         self.search_current_match - 1
                     };
-                    self.event_detail_scroll =
+                    let scroll_target =
                         self.search_match_lines[self.search_current_match] as u16;
+                    if self.view == View::ActivityDetail {
+                        self.activity_detail_scroll = scroll_target;
+                    } else {
+                        self.event_detail_scroll = scroll_target;
+                    }
                 }
                 vec![]
             }
@@ -1118,6 +1193,7 @@ impl App {
 
     fn current_scroll_mut(&mut self) -> Option<&mut u16> {
         match self.view {
+            View::ActivityDetail => Some(&mut self.activity_detail_scroll),
             View::InsightDetail => Some(&mut self.insight_detail_scroll),
             View::EventDetail => Some(&mut self.event_detail_scroll),
             _ => None,
@@ -1141,7 +1217,7 @@ impl App {
                     0
                 }
             }
-            View::InsightDetail | View::EventDetail => 0,
+            View::ActivityDetail | View::InsightDetail | View::EventDetail => 0,
             View::Insights => {
                 if let LoadState::Loaded(ref result) = self.insights {
                     result.findings.len()
@@ -1265,6 +1341,28 @@ impl App {
         }
     }
 
+    /// Get the selected timeline item (activity or child workflow) at the current
+    /// activity_table_state selection, resolving through the sorted timeline.
+    pub fn selected_timeline_item(&self) -> Option<TimelineItemRef<'_>> {
+        let selected = self.activity_table_state.selected()?;
+        // Build sorted timeline (same logic as ActivityListWidget::build_timeline)
+        let mut items: Vec<(i64, bool, usize)> = Vec::new(); // (sort_key, is_activity, index)
+        for (i, a) in self.activities.iter().enumerate() {
+            items.push((a.scheduled_event_id, true, i));
+        }
+        for (i, cw) in self.child_workflows.iter().enumerate() {
+            items.push((cw.initiated_event_id, false, i));
+        }
+        items.sort_by_key(|&(key, _, _)| key);
+
+        let (_, is_activity, idx) = items.get(selected)?;
+        if *is_activity {
+            Some(TimelineItemRef::Activity(&self.activities[*idx]))
+        } else {
+            Some(TimelineItemRef::ChildWorkflow(&self.child_workflows[*idx]))
+        }
+    }
+
     /// Get the currently selected event from the event log
     pub fn selected_event(&self) -> Option<&HistoryEvent> {
         if let LoadState::Loaded(ref events) = self.activity_events {
@@ -1276,10 +1374,16 @@ impl App {
         }
     }
 
-    /// Recompute search match lines for the current event detail
+    /// Recompute search match lines for the current detail view
     fn recompute_search_matches(&mut self) {
         if let Some(ref query) = self.search_query {
-            if let Some(event) = self.selected_event_cloned() {
+            if self.view == View::ActivityDetail {
+                // Build the same lines that the widget will render
+                let lines = self.build_activity_detail_lines();
+                let (_, indices) = highlight_search_matches(&lines, query);
+                self.search_match_lines = indices;
+                self.search_current_match = 0;
+            } else if let Some(event) = self.selected_event_cloned() {
                 let lines = json_to_lines(&event.details);
                 let (_, indices) = highlight_search_matches(&lines, query);
                 self.search_match_lines = indices;
@@ -1288,6 +1392,17 @@ impl App {
         } else {
             self.search_match_lines.clear();
             self.search_current_match = 0;
+        }
+    }
+
+    /// Build the text lines for the selected activity/child workflow detail view.
+    /// This must produce the same lines as ActivityDetailWidget so search indices match.
+    fn build_activity_detail_lines(&self) -> Vec<ratatui::text::Line<'static>> {
+        use crate::widgets::ActivityDetailWidget;
+        match self.selected_timeline_item() {
+            Some(TimelineItemRef::Activity(a)) => ActivityDetailWidget::build_activity_lines(a),
+            Some(TimelineItemRef::ChildWorkflow(cw)) => ActivityDetailWidget::build_child_wf_lines(cw),
+            None => Vec::new(),
         }
     }
 

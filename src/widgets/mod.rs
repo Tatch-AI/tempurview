@@ -1,3 +1,4 @@
+pub mod activity_detail;
 pub mod activity_list;
 pub mod event_detail;
 pub mod event_log;
@@ -10,6 +11,7 @@ pub mod type_list;
 pub mod workflow_detail;
 pub mod workflow_list;
 
+pub use activity_detail::*;
 pub use activity_list::*;
 pub use event_detail::*;
 pub use event_log::*;

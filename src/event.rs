@@ -138,7 +138,7 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('g') => Some(Action::EnterPendingG),
                 KeyCode::Char('G') => Some(Action::NavigateBottom),
                 KeyCode::Char('/') => match view {
-                    View::EventDetail => Some(Action::OpenSearchInput),
+                    View::EventDetail | View::ActivityDetail => Some(Action::OpenSearchInput),
                     _ => Some(Action::OpenFilterInput),
                 },
                 KeyCode::Char('r') => Some(Action::Refresh),
@@ -164,11 +164,11 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Enter => match view {
                     View::WorkflowList => Some(Action::ViewDetail),
                     View::TypeList => Some(Action::ViewDetail),
-                    View::ActivityList => None,
+                    View::ActivityList => Some(Action::ViewActivityDetail),
                     View::EventLog => Some(Action::ViewEventDetail),
                     View::Insights => Some(Action::ViewInsightDetail),
                     View::InsightDetail => Some(Action::ViewDetail),
-                    View::WorkflowDetail | View::EventDetail => None,
+                    View::WorkflowDetail | View::EventDetail | View::ActivityDetail => None,
                 },
                 KeyCode::Esc => Some(Action::GoBack),
                 // Status filter shortcuts (number keys)
@@ -215,10 +215,14 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('l') if view == View::WorkflowDetail => {
                     Some(Action::ViewEventLog)
                 }
-                KeyCode::Char('n') if view == View::EventDetail => {
+                KeyCode::Char('n')
+                    if view == View::EventDetail || view == View::ActivityDetail =>
+                {
                     Some(Action::NextSearchMatch)
                 }
-                KeyCode::Char('N') if view == View::EventDetail => {
+                KeyCode::Char('N')
+                    if view == View::EventDetail || view == View::ActivityDetail =>
+                {
                     Some(Action::PrevSearchMatch)
                 }
                 KeyCode::Char('n') if view == View::InsightDetail => {
