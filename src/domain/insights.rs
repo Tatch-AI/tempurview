@@ -82,6 +82,8 @@ pub struct InsightFinding {
     pub detail: String,
     pub affected_entities: Vec<String>,
     pub computed_at: DateTime<Utc>,
+    /// The specific values that triggered this finding, used for highlighting in the detail view
+    pub trigger_terms: Vec<String>,
 }
 
 /// Result of an insights scan

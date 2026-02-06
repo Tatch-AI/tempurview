@@ -229,6 +229,7 @@ Insight Detail:
   n           Next affected entity
   p           Previous affected entity
   Enter       Drill into workflow detail
+  (trigger terms are highlighted in detail text)
 
 Actions:
   r           Refresh data

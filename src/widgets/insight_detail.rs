@@ -30,14 +30,16 @@ impl<'a> InsightDetailWidget<'a> {
 
     fn build_lines(finding: &InsightFinding, selected_entity: Option<usize>) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
+        let sev_color = finding.severity.color();
 
         // Severity + Category header
         lines.push(Line::from(vec![
             Span::styled("Severity: ", Style::default().bold()),
             Span::styled(
-                finding.severity.label().to_string(),
+                format!(" {} ", finding.severity.label()),
                 Style::default()
-                    .fg(finding.severity.color())
+                    .fg(Color::Black)
+                    .bg(sev_color)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("    "),
@@ -47,32 +49,55 @@ impl<'a> InsightDetailWidget<'a> {
 
         lines.push(Line::from(""));
 
-        // Finding title
-        lines.push(Line::from(vec![
-            Span::styled("Finding: ", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(finding.title.clone()),
-        ]));
+        // Finding title — bold with severity color
+        let title_style = Style::default()
+            .fg(sev_color)
+            .add_modifier(Modifier::BOLD);
+        let mut title_spans = vec![Span::styled(
+            "Finding: ",
+            Style::default().fg(Color::Cyan).bold(),
+        )];
+        title_spans.extend(highlight_trigger_terms(
+            &finding.title,
+            &finding.trigger_terms,
+            title_style,
+            Style::default()
+                .fg(Color::Black)
+                .bg(sev_color)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.push(Line::from(title_spans));
 
         lines.push(Line::from(""));
 
-        // Detail text
+        // Detail text with trigger term highlighting
         if !finding.detail.is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 "Detail:",
                 Style::default().fg(Color::Cyan).bold(),
             )]));
-            // Split detail into wrapped lines
+
+            let highlight_style = Style::default()
+                .fg(Color::Black)
+                .bg(sev_color)
+                .add_modifier(Modifier::BOLD);
+            let normal_style = Style::default().fg(Color::White);
+
             for detail_line in finding.detail.lines() {
-                lines.push(Line::from(Span::styled(
-                    detail_line.to_string(),
-                    Style::default().fg(Color::Gray),
-                )));
+                let spans = highlight_trigger_terms(
+                    detail_line,
+                    &finding.trigger_terms,
+                    normal_style,
+                    highlight_style,
+                );
+                lines.push(Line::from(spans));
             }
             lines.push(Line::from(""));
         }
 
-        // Affected entities
+        // Affected entities with severity-colored bullets
         if !finding.affected_entities.is_empty() {
+            let count = finding.affected_entities.len();
             let header_suffix = if selected_entity.is_some() {
                 " (n/p to navigate, Enter to view)"
             } else {
@@ -80,25 +105,43 @@ impl<'a> InsightDetailWidget<'a> {
             };
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("Affected Entities ({}):", finding.affected_entities.len()),
+                    "Affected Entities ",
                     Style::default().fg(Color::Cyan).bold(),
                 ),
+                Span::styled(
+                    format!("({})", count),
+                    Style::default().fg(sev_color).bold(),
+                ),
+                Span::styled(":", Style::default().fg(Color::Cyan).bold()),
                 Span::styled(
                     header_suffix.to_string(),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
+            let bullet = Span::styled(
+                " \u{25CF} ",
+                Style::default().fg(sev_color),
+            );
             for (i, entity) in finding.affected_entities.iter().enumerate() {
                 let is_selected = selected_entity == Some(i);
                 if is_selected {
-                    lines.push(Line::from(Span::styled(
-                        format!("  >> {}. {}", i + 1, entity),
-                        Style::default()
-                            .add_modifier(Modifier::REVERSED)
-                            .add_modifier(Modifier::BOLD),
-                    )));
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            " \u{25B6} ",
+                            Style::default().fg(sev_color).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("{}. {}", i + 1, entity),
+                            Style::default()
+                                .add_modifier(Modifier::REVERSED)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
                 } else {
-                    lines.push(Line::from(format!("  {}. {}", i + 1, entity)));
+                    lines.push(Line::from(vec![
+                        bullet.clone(),
+                        Span::raw(format!("{}. {}", i + 1, entity)),
+                    ]));
                 }
             }
         }
@@ -135,6 +178,81 @@ impl Widget for InsightDetailWidget<'_> {
     }
 }
 
+/// Splits `text` into alternating normal/highlighted spans based on trigger term matches.
+/// Case-insensitive matching. Non-empty trigger terms only.
+fn highlight_trigger_terms(
+    text: &str,
+    trigger_terms: &[String],
+    normal_style: Style,
+    highlight_style: Style,
+) -> Vec<Span<'static>> {
+    if trigger_terms.is_empty() || text.is_empty() {
+        return vec![Span::styled(text.to_string(), normal_style)];
+    }
+
+    // Filter out empty terms and very short terms that would highlight too aggressively
+    let terms: Vec<&str> = trigger_terms
+        .iter()
+        .filter(|t| t.len() >= 2)
+        .map(|t| t.as_str())
+        .collect();
+
+    if terms.is_empty() {
+        return vec![Span::styled(text.to_string(), normal_style)];
+    }
+
+    let text_lower = text.to_lowercase();
+    // Find all match positions: (start, end)
+    let mut matches: Vec<(usize, usize)> = Vec::new();
+    for term in &terms {
+        let term_lower = term.to_lowercase();
+        let mut search_start = 0;
+        while let Some(pos) = text_lower[search_start..].find(&term_lower) {
+            let abs_pos = search_start + pos;
+            matches.push((abs_pos, abs_pos + term.len()));
+            search_start = abs_pos + 1;
+        }
+    }
+
+    if matches.is_empty() {
+        return vec![Span::styled(text.to_string(), normal_style)];
+    }
+
+    // Sort by start position, then by length descending (prefer longer matches)
+    matches.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+
+    // Merge overlapping ranges
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for m in matches {
+        if let Some(last) = merged.last_mut() {
+            if m.0 <= last.1 {
+                last.1 = last.1.max(m.1);
+                continue;
+            }
+        }
+        merged.push(m);
+    }
+
+    // Build spans
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+    for (start, end) in merged {
+        if cursor < start {
+            spans.push(Span::styled(text[cursor..start].to_string(), normal_style));
+        }
+        spans.push(Span::styled(
+            text[start..end].to_string(),
+            highlight_style,
+        ));
+        cursor = end;
+    }
+    if cursor < text.len() {
+        spans.push(Span::styled(text[cursor..].to_string(), normal_style));
+    }
+
+    spans
+}
+
 fn truncate_title(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
@@ -142,5 +260,64 @@ fn truncate_title(s: &str, max_len: usize) -> String {
         format!("{}...", &s[..max_len - 3])
     } else {
         s[..max_len].to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Style;
+
+    #[test]
+    fn test_highlight_no_terms() {
+        let spans = highlight_trigger_terms(
+            "hello world",
+            &[],
+            Style::default(),
+            Style::default().bold(),
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "hello world");
+    }
+
+    #[test]
+    fn test_highlight_single_match() {
+        let spans = highlight_trigger_terms(
+            "Payment has 75% failure rate",
+            &["Payment".to_string(), "75%".to_string()],
+            Style::default(),
+            Style::default().bold(),
+        );
+        // Should have: "Payment" highlighted, " has " normal, "75%" highlighted, " failure rate" normal
+        assert!(spans.len() >= 4);
+        assert_eq!(spans[0].content, "Payment");
+        assert_eq!(spans[2].content, "75%");
+    }
+
+    #[test]
+    fn test_highlight_case_insensitive() {
+        let spans = highlight_trigger_terms(
+            "The PAYMENT type failed",
+            &["payment".to_string()],
+            Style::default(),
+            Style::default().bold(),
+        );
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content, "The ");
+        assert_eq!(spans[1].content, "PAYMENT");
+        assert_eq!(spans[2].content, " type failed");
+    }
+
+    #[test]
+    fn test_highlight_short_terms_filtered() {
+        let spans = highlight_trigger_terms(
+            "a b c hello",
+            &["a".to_string()],
+            Style::default(),
+            Style::default().bold(),
+        );
+        // Single char term should be filtered out
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "a b c hello");
     }
 }

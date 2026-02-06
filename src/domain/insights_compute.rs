@@ -47,6 +47,7 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
                 ),
                 affected_entities: affected,
                 computed_at: now,
+                trigger_terms: vec![wf_type.to_string()],
             });
             continue; // Skip the rate-based finding — all-failed is more specific
         }
@@ -88,6 +89,7 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
                     ),
                     affected_entities: affected,
                     computed_at: now,
+                    trigger_terms: vec![wf_type.to_string(), format!("{:.0}%", rate * 100.0)],
                 });
             }
         }
@@ -135,6 +137,7 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
             ),
             affected_entities: affected,
             computed_at: now,
+            trigger_terms: vec![wf_type.to_string(), format!("{}h", max_hours)],
         });
     }
 
@@ -209,6 +212,7 @@ pub fn compute_activity_findings(
                     ),
                     affected_entities: affected_wfs,
                     computed_at: now,
+                    trigger_terms: vec![activity_type.to_string(), format!("attempts: {}", max_attempt)],
                 });
             }
         }
@@ -243,6 +247,7 @@ pub fn compute_activity_findings(
                 ),
                 affected_entities: vec![queue_name.to_string()],
                 computed_at: now,
+                trigger_terms: vec![queue_name.to_string(), format!("{:.1}s", median_secs)],
             });
         }
     }
@@ -301,6 +306,11 @@ pub fn compute_activity_findings(
                 )
             };
 
+            let mut terms = vec![activity_type.to_string()];
+            if let Some(msg) = common_message {
+                terms.push(msg.to_string());
+            }
+
             findings.push(InsightFinding {
                 severity,
                 category: InsightCategory::ActivityFailure,
@@ -311,6 +321,7 @@ pub fn compute_activity_findings(
                 detail,
                 affected_entities: affected_wfs,
                 computed_at: now,
+                trigger_terms: terms,
             });
         }
     }
@@ -362,6 +373,7 @@ pub fn compute_activity_findings(
             ),
             affected_entities: affected_wfs,
             computed_at: now,
+            trigger_terms: vec![activity_type.to_string(), format!("attempt {}", max_attempt)],
         });
     }
 
@@ -476,6 +488,11 @@ pub fn compute_activity_findings(
                     .map(|(_, _, snippet)| snippet.clone())
                     .collect();
 
+                let mut terms = vec![activity_type.to_string(), top_pattern.to_string()];
+                for snippet in examples.iter().take(2) {
+                    terms.push(snippet.clone());
+                }
+
                 findings.push(InsightFinding {
                     severity,
                     category: InsightCategory::ErrorInOutput,
@@ -489,6 +506,7 @@ pub fn compute_activity_findings(
                     ),
                     affected_entities: affected_wfs,
                     computed_at: now,
+                    trigger_terms: terms,
                 });
             }
         }
@@ -534,6 +552,11 @@ pub fn compute_activity_findings(
             .map(|(t, c)| format!("{}({})", t, c))
             .collect();
 
+        let mut terms = vec![format!("{}min", max_mins)];
+        for t in by_type.keys() {
+            terms.push(t.to_string());
+        }
+
         findings.push(InsightFinding {
             severity,
             category: InsightCategory::LongRunningActivity,
@@ -549,6 +572,7 @@ pub fn compute_activity_findings(
             ),
             affected_entities: affected,
             computed_at: now,
+            trigger_terms: terms,
         });
     }
 
@@ -623,6 +647,7 @@ pub fn compute_child_workflow_findings(
                     ),
                     affected_entities: affected_wfs,
                     computed_at: now,
+                    trigger_terms: vec![child_type.to_string()],
                 });
             }
         }
@@ -671,6 +696,7 @@ pub fn compute_child_workflow_findings(
                     ),
                     affected_entities: affected_wfs,
                     computed_at: now,
+                    trigger_terms: vec![child_type.to_string(), format!("{:.1}s", median_secs)],
                 });
             }
         }
@@ -1216,6 +1242,7 @@ mod tests {
                 detail: String::new(),
                 affected_entities: vec!["a".to_string()],
                 computed_at: Utc::now(),
+                trigger_terms: vec![],
             },
             InsightFinding {
                 severity: InsightSeverity::Critical,
@@ -1224,6 +1251,7 @@ mod tests {
                 detail: String::new(),
                 affected_entities: vec!["a".to_string()],
                 computed_at: Utc::now(),
+                trigger_terms: vec![],
             },
             InsightFinding {
                 severity: InsightSeverity::Warning,
@@ -1232,6 +1260,7 @@ mod tests {
                 detail: String::new(),
                 affected_entities: vec!["a".to_string()],
                 computed_at: Utc::now(),
+                trigger_terms: vec![],
             },
         ];
 
@@ -1399,6 +1428,7 @@ mod tests {
                 detail: String::new(),
                 affected_entities: vec!["a".to_string()],
                 computed_at: Utc::now(),
+                trigger_terms: vec![],
             },
             InsightFinding {
                 severity: InsightSeverity::Warning,
@@ -1407,6 +1437,7 @@ mod tests {
                 detail: String::new(),
                 affected_entities: vec!["a".to_string(), "b".to_string(), "c".to_string()],
                 computed_at: Utc::now(),
+                trigger_terms: vec![],
             },
         ];
 
