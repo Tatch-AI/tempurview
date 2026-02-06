@@ -2,8 +2,20 @@
 name = "tempurview"
 version = "0.1.0"
 edition = "2021"
-description = "A terminal user interface for viewing and managing Temporal workflows"
+rust-version = "1.70"
+description = "A CLI and TUI for viewing and managing Temporal workflows"
 license = "MIT"
+repository = "https://github.com/Tatch-AI/tempurview"
+homepage = "https://github.com/Tatch-AI/tempurview"
+keywords = ["temporal", "workflow", "tui", "cli", "grpc"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    "design-docs/",
+    "tests/",
+    "TESTING.md",
+    "target/",
+    ".github/",
+]
 
 [dependencies]
 # Async runtime
