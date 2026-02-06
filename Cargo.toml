@@ -18,7 +18,6 @@ exclude = [
     ".github/",
     "docs/",
     "/proto/",
-    "/static/",
 ]
 
 [dependencies]
