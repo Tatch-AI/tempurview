@@ -11,14 +11,24 @@ use ratatui::{
 pub struct InsightDetailWidget<'a> {
     finding: &'a InsightFinding,
     scroll: u16,
+    selected_entity: Option<usize>,
 }
 
 impl<'a> InsightDetailWidget<'a> {
     pub fn new(finding: &'a InsightFinding, scroll: u16) -> Self {
-        Self { finding, scroll }
+        Self {
+            finding,
+            scroll,
+            selected_entity: None,
+        }
     }
 
-    fn build_lines(finding: &InsightFinding) -> Vec<Line<'static>> {
+    pub fn selected_entity(mut self, index: Option<usize>) -> Self {
+        self.selected_entity = index;
+        self
+    }
+
+    fn build_lines(finding: &InsightFinding, selected_entity: Option<usize>) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         // Severity + Category header
@@ -63,14 +73,33 @@ impl<'a> InsightDetailWidget<'a> {
 
         // Affected entities
         if !finding.affected_entities.is_empty() {
+            let header_suffix = if selected_entity.is_some() {
+                " (n/p to navigate, Enter to view)"
+            } else {
+                ""
+            };
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("Affected Entities ({}):", finding.affected_entities.len()),
                     Style::default().fg(Color::Cyan).bold(),
                 ),
+                Span::styled(
+                    header_suffix.to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]));
             for (i, entity) in finding.affected_entities.iter().enumerate() {
-                lines.push(Line::from(format!("  {}. {}", i + 1, entity)));
+                let is_selected = selected_entity == Some(i);
+                if is_selected {
+                    lines.push(Line::from(Span::styled(
+                        format!("  >> {}. {}", i + 1, entity),
+                        Style::default()
+                            .add_modifier(Modifier::REVERSED)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                } else {
+                    lines.push(Line::from(format!("  {}. {}", i + 1, entity)));
+                }
             }
         }
 
@@ -95,7 +124,7 @@ impl Widget for InsightDetailWidget<'_> {
             .borders(Borders::ALL)
             .title(Span::styled(title, sev_style));
 
-        let lines = Self::build_lines(self.finding);
+        let lines = Self::build_lines(self.finding, self.selected_entity);
 
         let paragraph = Paragraph::new(lines)
             .block(block)

@@ -55,6 +55,11 @@ pub enum Action {
     // Insights view
     ViewInsights,
     ViewInsightDetail,
+    NextAffectedEntity,
+    PrevAffectedEntity,
+
+    // Event log view
+    ViewEventLog,
 
     // Filtering
     SetStatusFilter(Option<WorkflowStatus>),
@@ -125,6 +130,9 @@ impl PartialEq for Action {
             (Action::ToggleActivityDetail, Action::ToggleActivityDetail) => true,
             (Action::ViewInsights, Action::ViewInsights) => true,
             (Action::ViewInsightDetail, Action::ViewInsightDetail) => true,
+            (Action::NextAffectedEntity, Action::NextAffectedEntity) => true,
+            (Action::PrevAffectedEntity, Action::PrevAffectedEntity) => true,
+            (Action::ViewEventLog, Action::ViewEventLog) => true,
             (Action::SetStatusFilter(a), Action::SetStatusFilter(b)) => a == b,
             (Action::SetTypeFilter(a), Action::SetTypeFilter(b)) => a == b,
             (Action::NextStatusFilter, Action::NextStatusFilter) => true,

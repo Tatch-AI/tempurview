@@ -11,8 +11,8 @@ use tempurview::event::{event_to_action, EventHandler};
 use tempurview::logging;
 use tempurview::tui::Tui;
 use tempurview::widgets::{
-    ActivityListWidget, FilterInput, HelpBar, HelpOverlay, InsightDetailWidget, InsightsWidget,
-    StatusDashboard, TypeListWidget, WorkflowDetailWidget, WorkflowListWidget,
+    ActivityListWidget, EventLogWidget, FilterInput, HelpBar, HelpOverlay, InsightDetailWidget,
+    InsightsWidget, StatusDashboard, TypeListWidget, WorkflowDetailWidget, WorkflowListWidget,
 };
 
 use ratatui::{
@@ -465,10 +465,20 @@ fn render(app: &App, frame: &mut Frame) {
         View::ActivityList => {
             let mut table_state = app.activity_table_state.clone();
             frame.render_stateful_widget(
-                ActivityListWidget::new(&app.activity_events, &app.activities)
-                    .expanded(app.expanded_activity),
+                ActivityListWidget::new(
+                    &app.activity_events,
+                    &app.activities,
+                    &app.child_workflows,
+                )
+                .expanded(app.expanded_activity),
                 layout[3],
                 &mut table_state,
+            );
+        }
+        View::EventLog => {
+            frame.render_widget(
+                EventLogWidget::new(&app.activity_events, app.event_log_scroll),
+                layout[3],
             );
         }
         View::Insights => {
@@ -489,8 +499,14 @@ fn render(app: &App, frame: &mut Frame) {
                         .and_then(|i| r.findings.get(i))
                 })
             {
+                let sel_entity = if finding.affected_entities.is_empty() {
+                    None
+                } else {
+                    Some(app.insight_entity_index)
+                };
                 frame.render_widget(
-                    InsightDetailWidget::new(finding, app.insight_detail_scroll),
+                    InsightDetailWidget::new(finding, app.insight_detail_scroll)
+                        .selected_entity(sel_entity),
                     layout[3],
                 );
             }
@@ -517,6 +533,7 @@ fn render_title(app: &App, frame: &mut Frame, area: Rect) {
         View::TypeList => "Workflow Types",
         View::WorkflowDetail => "Workflow Detail",
         View::ActivityList => "Activities",
+        View::EventLog => "Event Log",
         View::Insights => "Insights",
         View::InsightDetail => "Insight Detail",
     };
@@ -589,8 +606,7 @@ fn handle_effects(
                 };
                 cli_handle.load_type_stats(app.filter.clone(), effective_limit);
             }
-            Effect::LoadWorkflowDetail(id) => {
-                let run_id = app.selected_workflow_run_id().map(|s| s.to_string());
+            Effect::LoadWorkflowDetail(id, run_id) => {
                 cli_handle.load_detail(id, run_id);
             }
             Effect::LoadHistory(workflow_id, run_id) => {

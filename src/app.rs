@@ -1,8 +1,8 @@
 use crate::action::{Action, DataPayload, TableColumn};
 use crate::domain::{
-    correlate_activities, parse_date_input, ActivityExecution, HistoryEvent, InsightsResult,
-    SortDirection, StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter,
-    WorkflowStatus, WorkflowSummary,
+    correlate_activities, correlate_child_workflows, parse_date_input, ActivityExecution,
+    ChildWorkflowExecution, HistoryEvent, InsightsResult, SortDirection, StatusCounts,
+    TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter, WorkflowStatus, WorkflowSummary,
 };
 use ratatui::widgets::TableState;
 use std::collections::HashSet;
@@ -15,6 +15,7 @@ pub enum View {
     WorkflowDetail,
     TypeList,
     ActivityList,
+    EventLog,
     Insights,
     InsightDetail,
 }
@@ -94,13 +95,18 @@ pub struct App {
     // ActivityList state
     pub activity_events: LoadState<Vec<HistoryEvent>>,
     pub activities: Vec<ActivityExecution>,
+    pub child_workflows: Vec<ChildWorkflowExecution>,
     pub activity_table_state: TableState,
     pub expanded_activity: Option<usize>,
+
+    // EventLog state
+    pub event_log_scroll: u16,
 
     // Insights state
     pub insights: LoadState<InsightsResult>,
     pub insights_table_state: TableState,
     pub insight_detail_scroll: u16,
+    pub insight_entity_index: usize,
 
     // Config
     pub temporal_namespace: String,
@@ -155,12 +161,16 @@ impl App {
 
             activity_events: LoadState::NotLoaded,
             activities: Vec::new(),
+            child_workflows: Vec::new(),
             activity_table_state: TableState::default().with_selected(0),
             expanded_activity: None,
+
+            event_log_scroll: 0,
 
             insights: LoadState::NotLoaded,
             insights_table_state: TableState::default().with_selected(0),
             insight_detail_scroll: 0,
+            insight_entity_index: 0,
 
             temporal_namespace: String::new(),
 
@@ -190,42 +200,41 @@ impl App {
 
         match action {
             Action::NavigateUp => {
-                if self.view == View::InsightDetail {
-                    self.insight_detail_scroll = self.insight_detail_scroll.saturating_sub(1);
+                if let Some(scroll) = self.current_scroll_mut() {
+                    *scroll = scroll.saturating_sub(1);
                 } else {
                     self.select_previous();
                 }
                 vec![]
             }
             Action::NavigateDown => {
-                if self.view == View::InsightDetail {
-                    self.insight_detail_scroll = self.insight_detail_scroll.saturating_add(1);
+                if let Some(scroll) = self.current_scroll_mut() {
+                    *scroll = scroll.saturating_add(1);
                 } else {
                     self.select_next();
                 }
                 vec![]
             }
             Action::NavigateTop => {
-                if self.view == View::InsightDetail {
-                    self.insight_detail_scroll = 0;
+                if let Some(scroll) = self.current_scroll_mut() {
+                    *scroll = 0;
                 } else {
                     self.select_first();
                 }
                 vec![]
             }
             Action::NavigateBottom => {
-                if self.view == View::InsightDetail {
-                    self.insight_detail_scroll = u16::MAX;
+                if let Some(scroll) = self.current_scroll_mut() {
+                    *scroll = u16::MAX;
                 } else {
                     self.select_last();
                 }
                 vec![]
             }
             Action::PageUp => {
-                if self.view == View::InsightDetail {
-                    self.insight_detail_scroll = self
-                        .insight_detail_scroll
-                        .saturating_sub(self.page_size as u16);
+                let ps = self.page_size as u16;
+                if let Some(scroll) = self.current_scroll_mut() {
+                    *scroll = scroll.saturating_sub(ps);
                 } else {
                     for _ in 0..self.page_size {
                         self.select_previous();
@@ -234,10 +243,9 @@ impl App {
                 vec![]
             }
             Action::PageDown => {
-                if self.view == View::InsightDetail {
-                    self.insight_detail_scroll = self
-                        .insight_detail_scroll
-                        .saturating_add(self.page_size as u16);
+                let ps = self.page_size as u16;
+                if let Some(scroll) = self.current_scroll_mut() {
+                    *scroll = scroll.saturating_add(ps);
                 } else {
                     for _ in 0..self.page_size {
                         self.select_next();
@@ -264,13 +272,37 @@ impl App {
                             vec![]
                         }
                     }
+                    View::InsightDetail => {
+                        // Drill down from insight detail into a workflow
+                        if let LoadState::Loaded(ref result) = self.insights {
+                            if let Some(selected_finding) = self
+                                .insights_table_state
+                                .selected()
+                                .and_then(|i| result.findings.get(i))
+                            {
+                                if let Some(entity) = selected_finding
+                                    .affected_entities
+                                    .get(self.insight_entity_index)
+                                {
+                                    let id = entity.clone();
+                                    self.view_stack.push(self.view);
+                                    self.view = View::WorkflowDetail;
+                                    self.selected_workflow = Some(LoadState::Loading);
+                                    return vec![Effect::LoadWorkflowDetail(id, None)];
+                                }
+                            }
+                        }
+                        vec![]
+                    }
                     _ => {
                         if let Some(wf_id) = self.selected_workflow_id() {
                             let id = wf_id.to_string();
+                            let run_id =
+                                self.selected_workflow_run_id().map(|s| s.to_string());
                             self.view_stack.push(self.view);
                             self.view = View::WorkflowDetail;
                             self.selected_workflow = Some(LoadState::Loading);
-                            vec![Effect::LoadWorkflowDetail(id)]
+                            vec![Effect::LoadWorkflowDetail(id, run_id)]
                         } else {
                             vec![]
                         }
@@ -294,7 +326,11 @@ impl App {
                     if self.view == View::ActivityList {
                         self.activity_events = LoadState::NotLoaded;
                         self.activities.clear();
+                        self.child_workflows.clear();
                         self.expanded_activity = None;
+                    } else if self.view == View::EventLog {
+                        self.event_log_scroll = 0;
+                        // Keep activity_events cached for quick re-entry
                     } else if self.view == View::InsightDetail {
                         self.insight_detail_scroll = 0;
                     } else if self.view == View::Insights {
@@ -438,7 +474,19 @@ impl App {
                         let run_id = Some(detail.summary.run_id.clone());
                         self.activity_events = LoadState::Loading;
                         self.activities.clear();
+                        self.child_workflows.clear();
                         self.expanded_activity = None;
+                        return vec![Effect::LoadHistory(wf_id, run_id)];
+                    }
+                    return vec![];
+                }
+                if self.view == View::EventLog {
+                    // Re-load history for event log
+                    if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
+                        let wf_id = detail.summary.workflow_id.clone();
+                        let run_id = Some(detail.summary.run_id.clone());
+                        self.activity_events = LoadState::Loading;
+                        self.event_log_scroll = 0;
                         return vec![Effect::LoadHistory(wf_id, run_id)];
                     }
                     return vec![];
@@ -502,6 +550,7 @@ impl App {
                     self.view = View::ActivityList;
                     self.activity_events = LoadState::Loading;
                     self.activities.clear();
+                    self.child_workflows.clear();
                     self.activity_table_state.select(Some(0));
                     self.expanded_activity = None;
                     vec![Effect::LoadHistory(wf_id, run_id)]
@@ -511,8 +560,9 @@ impl App {
                 }
             }
             Action::ToggleActivityDetail => {
+                let combined_len = self.activities.len() + self.child_workflows.len();
                 if let Some(selected) = self.activity_table_state.selected() {
-                    if selected < self.activities.len() {
+                    if selected < combined_len {
                         if self.expanded_activity == Some(selected) {
                             self.expanded_activity = None;
                         } else {
@@ -536,10 +586,63 @@ impl App {
                             self.view_stack.push(self.view);
                             self.view = View::InsightDetail;
                             self.insight_detail_scroll = 0;
+                            self.insight_entity_index = 0;
                         }
                     }
                 }
                 vec![]
+            }
+            Action::NextAffectedEntity => {
+                if let LoadState::Loaded(ref result) = self.insights {
+                    if let Some(finding) = self
+                        .insights_table_state
+                        .selected()
+                        .and_then(|i| result.findings.get(i))
+                    {
+                        let len = finding.affected_entities.len();
+                        if len > 0 {
+                            self.insight_entity_index =
+                                (self.insight_entity_index + 1) % len;
+                        }
+                    }
+                }
+                vec![]
+            }
+            Action::PrevAffectedEntity => {
+                if let LoadState::Loaded(ref result) = self.insights {
+                    if let Some(finding) = self
+                        .insights_table_state
+                        .selected()
+                        .and_then(|i| result.findings.get(i))
+                    {
+                        let len = finding.affected_entities.len();
+                        if len > 0 {
+                            self.insight_entity_index = if self.insight_entity_index == 0 {
+                                len - 1
+                            } else {
+                                self.insight_entity_index - 1
+                            };
+                        }
+                    }
+                }
+                vec![]
+            }
+            Action::ViewEventLog => {
+                // Enter event log view reusing already-loaded history or loading fresh
+                self.view_stack.push(self.view);
+                self.view = View::EventLog;
+                self.event_log_scroll = 0;
+                if self.activity_events.is_loaded() {
+                    vec![]
+                } else if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
+                    let wf_id = detail.summary.workflow_id.clone();
+                    let run_id = Some(detail.summary.run_id.clone());
+                    self.activity_events = LoadState::Loading;
+                    vec![Effect::LoadHistory(wf_id, run_id)]
+                } else {
+                    self.last_error = Some("No workflow loaded".to_string());
+                    vec![]
+                }
             }
             Action::ViewTypeList => {
                 self.view_stack.push(self.view);
@@ -743,12 +846,15 @@ impl App {
                     }
                     DataPayload::History(events) => {
                         self.activities = correlate_activities(&events);
+                        self.child_workflows = correlate_child_workflows(&events);
                         self.activity_events = LoadState::Loaded(events);
-                        // Reset selection if out of bounds
+                        // Reset selection if out of bounds (combined length for timeline)
+                        let combined_len =
+                            self.activities.len() + self.child_workflows.len();
                         let selected = self.activity_table_state.selected().unwrap_or(0);
-                        if selected >= self.activities.len() && !self.activities.is_empty() {
+                        if selected >= combined_len && combined_len > 0 {
                             self.activity_table_state
-                                .select(Some(self.activities.len() - 1));
+                                .select(Some(combined_len - 1));
                         }
                     }
                     DataPayload::Insights(result) => {
@@ -870,6 +976,14 @@ impl App {
         }
     }
 
+    fn current_scroll_mut(&mut self) -> Option<&mut u16> {
+        match self.view {
+            View::InsightDetail => Some(&mut self.insight_detail_scroll),
+            View::EventLog => Some(&mut self.event_log_scroll),
+            _ => None,
+        }
+    }
+
     fn current_list_len(&self) -> usize {
         match self.view {
             View::TypeList => {
@@ -879,8 +993,8 @@ impl App {
                     0
                 }
             }
-            View::ActivityList => self.activities.len(),
-            View::InsightDetail => 0,
+            View::ActivityList => self.activities.len() + self.child_workflows.len(),
+            View::InsightDetail | View::EventLog => 0,
             View::Insights => {
                 if let LoadState::Loaded(ref result) = self.insights {
                     result.findings.len()
@@ -1010,7 +1124,7 @@ impl App {
 pub enum Effect {
     LoadCounts,
     LoadWorkflows,
-    LoadWorkflowDetail(String),
+    LoadWorkflowDetail(String, Option<String>),
     LoadTypeStats,
     LoadHistory(String, Option<String>),
     LoadInsights {

@@ -156,8 +156,8 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                     View::TypeList => Some(Action::ViewDetail),
                     View::ActivityList => Some(Action::ToggleActivityDetail),
                     View::Insights => Some(Action::ViewInsightDetail),
-                    View::InsightDetail => None,
-                    View::WorkflowDetail => None,
+                    View::InsightDetail => Some(Action::ViewDetail),
+                    View::WorkflowDetail | View::EventLog => None,
                 },
                 KeyCode::Esc => Some(Action::GoBack),
                 // Status filter shortcuts (number keys)
@@ -200,6 +200,15 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 }
                 KeyCode::Char('a') if view == View::WorkflowDetail => {
                     Some(Action::ViewActivities)
+                }
+                KeyCode::Char('l') if view == View::WorkflowDetail => {
+                    Some(Action::ViewEventLog)
+                }
+                KeyCode::Char('n') if view == View::InsightDetail => {
+                    Some(Action::NextAffectedEntity)
+                }
+                KeyCode::Char('p') if view == View::InsightDetail => {
+                    Some(Action::PrevAffectedEntity)
                 }
                 KeyCode::Char('x') if view == View::WorkflowDetail => {
                     Some(Action::CopyWorkflowUrl)

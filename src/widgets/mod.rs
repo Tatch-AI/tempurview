@@ -1,4 +1,5 @@
 pub mod activity_list;
+pub mod event_log;
 pub mod filter_input;
 pub mod help_bar;
 pub mod insight_detail;
@@ -9,6 +10,7 @@ pub mod workflow_detail;
 pub mod workflow_list;
 
 pub use activity_list::*;
+pub use event_log::*;
 pub use filter_input::*;
 pub use help_bar::*;
 pub use insight_detail::*;

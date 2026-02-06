@@ -67,6 +67,7 @@ impl HelpBar {
             (View::WorkflowDetail, _) => vec![
                 ("Esc", "Back"),
                 ("a", "Activities"),
+                ("l", "Event Log"),
                 ("x", "Copy URL"),
                 ("gx", "Open URL"),
                 ("c", "Cancel"),
@@ -92,7 +93,17 @@ impl HelpBar {
                 ("j/k", "Scroll"),
                 ("^D/^U", "Page"),
                 ("g/G", "Top/Bottom"),
+                ("n/p", "Next/Prev Entity"),
+                ("Enter", "View Workflow"),
                 ("Esc", "Back"),
+                ("?", "Help"),
+            ],
+            (View::EventLog, _) => vec![
+                ("j/k", "Scroll"),
+                ("^D/^U", "Page"),
+                ("g/G", "Top/Bottom"),
+                ("Esc", "Back"),
+                ("r", "Refresh"),
                 ("?", "Help"),
             ],
         };
@@ -181,10 +192,16 @@ Column Visibility:
   F3          Toggle Workflow ID column
   F4          Toggle Started column
 
-Activities:
+Activities / Event Log:
   a           View activities (detail view)
+  l           View raw event log
   Enter       Expand/collapse activity detail
   Esc         Back to workflow detail
+
+Insight Detail:
+  n           Next affected entity
+  p           Previous affected entity
+  Enter       Drill into workflow detail
 
 Actions:
   r           Refresh data
