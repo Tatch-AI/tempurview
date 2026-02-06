@@ -49,6 +49,7 @@ impl HelpBar {
                 ("d", "Date"),
                 ("s", "Sort"),
                 ("T", "Types"),
+                ("I", "Insights"),
                 ("/", "Filter"),
                 ("1-7", "Status"),
                 ("r", "Refresh"),
@@ -78,6 +79,13 @@ impl HelpBar {
                 ("Enter", "Expand"),
                 ("Esc", "Back"),
                 ("r", "Refresh"),
+                ("?", "Help"),
+            ],
+            (View::Insights, _) => vec![
+                ("j/k", "Navigate"),
+                ("Enter", "Expand"),
+                ("Esc", "Back"),
+                ("r", "Re-scan"),
                 ("?", "Help"),
             ],
         };
@@ -133,6 +141,7 @@ Views:
   Enter       Select / View details
   Esc         Go back
   T           Workflow Types view
+  I           Health Insights scan
 
 Sorting:
   s           Enter sort mode

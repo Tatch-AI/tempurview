@@ -1,6 +1,6 @@
 use crate::domain::{
-    DateRangePreset, HistoryEvent, StatusCounts, TypeStat, WorkflowDetail, WorkflowStatus,
-    WorkflowSummary,
+    DateRangePreset, HistoryEvent, InsightsResult, StatusCounts, TypeStat, WorkflowDetail,
+    WorkflowStatus, WorkflowSummary,
 };
 
 /// Table columns that can be toggled
@@ -51,6 +51,10 @@ pub enum Action {
 
     // Activity view
     ToggleActivityDetail,
+
+    // Insights view
+    ViewInsights,
+    ToggleInsightDetail,
 
     // Filtering
     SetStatusFilter(Option<WorkflowStatus>),
@@ -119,6 +123,8 @@ impl PartialEq for Action {
             (Action::ViewActivities, Action::ViewActivities) => true,
             (Action::GoBack, Action::GoBack) => true,
             (Action::ToggleActivityDetail, Action::ToggleActivityDetail) => true,
+            (Action::ViewInsights, Action::ViewInsights) => true,
+            (Action::ToggleInsightDetail, Action::ToggleInsightDetail) => true,
             (Action::SetStatusFilter(a), Action::SetStatusFilter(b)) => a == b,
             (Action::SetTypeFilter(a), Action::SetTypeFilter(b)) => a == b,
             (Action::NextStatusFilter, Action::NextStatusFilter) => true,
@@ -167,4 +173,5 @@ pub enum DataPayload {
     Detail(Box<WorkflowDetail>),
     TypeStats(Vec<TypeStat>),
     History(Vec<HistoryEvent>),
+    Insights(InsightsResult),
 }

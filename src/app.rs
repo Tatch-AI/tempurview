@@ -1,8 +1,8 @@
 use crate::action::{Action, DataPayload, TableColumn};
 use crate::domain::{
-    correlate_activities, parse_date_input, ActivityExecution, HistoryEvent, SortDirection,
-    StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter, WorkflowStatus,
-    WorkflowSummary,
+    correlate_activities, parse_date_input, ActivityExecution, HistoryEvent, InsightsResult,
+    SortDirection, StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter,
+    WorkflowStatus, WorkflowSummary,
 };
 use ratatui::widgets::TableState;
 use std::collections::HashSet;
@@ -15,6 +15,7 @@ pub enum View {
     WorkflowDetail,
     TypeList,
     ActivityList,
+    Insights,
 }
 
 /// Input mode
@@ -95,6 +96,11 @@ pub struct App {
     pub activity_table_state: TableState,
     pub expanded_activity: Option<usize>,
 
+    // Insights state
+    pub insights: LoadState<InsightsResult>,
+    pub insights_table_state: TableState,
+    pub expanded_insight: Option<usize>,
+
     // Config
     pub temporal_namespace: String,
 
@@ -150,6 +156,10 @@ impl App {
             activities: Vec::new(),
             activity_table_state: TableState::default().with_selected(0),
             expanded_activity: None,
+
+            insights: LoadState::NotLoaded,
+            insights_table_state: TableState::default().with_selected(0),
+            expanded_insight: None,
 
             temporal_namespace: String::new(),
 
@@ -256,6 +266,9 @@ impl App {
                         self.activity_events = LoadState::NotLoaded;
                         self.activities.clear();
                         self.expanded_activity = None;
+                    } else if self.view == View::Insights {
+                        // Keep cached insights data for quick re-entry
+                        self.expanded_insight = None;
                     } else {
                         self.selected_workflow = None;
                     }
@@ -400,6 +413,13 @@ impl App {
                     }
                     return vec![];
                 }
+                if self.view == View::Insights {
+                    // Re-run the insights scan
+                    self.insights = LoadState::Loading;
+                    self.insights_table_state.select(Some(0));
+                    self.expanded_insight = None;
+                    return vec![Effect::LoadInsights];
+                }
                 let mut effects = vec![Effect::LoadCounts, Effect::LoadWorkflows];
                 self.status_counts = LoadState::Loading;
                 self.workflows = LoadState::Loading;
@@ -459,6 +479,28 @@ impl App {
                             self.expanded_activity = None;
                         } else {
                             self.expanded_activity = Some(selected);
+                        }
+                    }
+                }
+                vec![]
+            }
+            Action::ViewInsights => {
+                self.view_stack.push(self.view);
+                self.view = View::Insights;
+                self.insights = LoadState::Loading;
+                self.insights_table_state.select(Some(0));
+                self.expanded_insight = None;
+                vec![Effect::LoadInsights]
+            }
+            Action::ToggleInsightDetail => {
+                if let LoadState::Loaded(ref result) = self.insights {
+                    if let Some(selected) = self.insights_table_state.selected() {
+                        if selected < result.findings.len() {
+                            if self.expanded_insight == Some(selected) {
+                                self.expanded_insight = None;
+                            } else {
+                                self.expanded_insight = Some(selected);
+                            }
                         }
                     }
                 }
@@ -674,6 +716,17 @@ impl App {
                                 .select(Some(self.activities.len() - 1));
                         }
                     }
+                    DataPayload::Insights(result) => {
+                        self.insights = LoadState::Loaded(result);
+                        // Reset selection if out of bounds
+                        if let LoadState::Loaded(ref r) = self.insights {
+                            let selected = self.insights_table_state.selected().unwrap_or(0);
+                            if selected >= r.findings.len() && !r.findings.is_empty() {
+                                self.insights_table_state
+                                    .select(Some(r.findings.len() - 1));
+                            }
+                        }
+                    }
                 }
                 vec![]
             }
@@ -690,7 +743,10 @@ impl App {
                     self.selected_workflow = Some(LoadState::Error(msg.clone()));
                 }
                 if self.activity_events.is_loading() {
-                    self.activity_events = LoadState::Error(msg);
+                    self.activity_events = LoadState::Error(msg.clone());
+                }
+                if self.insights.is_loading() {
+                    self.insights = LoadState::Error(msg);
                 }
                 vec![]
             }
@@ -761,6 +817,7 @@ impl App {
         match self.view {
             View::TypeList => &mut self.type_table_state,
             View::ActivityList => &mut self.activity_table_state,
+            View::Insights => &mut self.insights_table_state,
             _ => &mut self.table_state,
         }
     }
@@ -775,6 +832,13 @@ impl App {
                 }
             }
             View::ActivityList => self.activities.len(),
+            View::Insights => {
+                if let LoadState::Loaded(ref result) = self.insights {
+                    result.findings.len()
+                } else {
+                    0
+                }
+            }
             _ => {
                 if let LoadState::Loaded(ref workflows) = self.workflows {
                     workflows.len()
@@ -900,6 +964,7 @@ pub enum Effect {
     LoadWorkflowDetail(String),
     LoadTypeStats,
     LoadHistory(String, Option<String>),
+    LoadInsights,
     CancelWorkflow(String),
     TerminateWorkflow(String),
     CopyToClipboard(String),

@@ -5,7 +5,12 @@
 
 use crate::action::{Action, DataPayload};
 use crate::client::TemporalClient;
-use crate::domain::{StatusCounts, TypeStat, WorkflowFilter, WorkflowStatus};
+use crate::domain::{
+    correlate_activities, compute_activity_findings, compute_list_findings, rank_findings,
+    select_workflows_for_sampling, InsightThresholds, InsightsResult, StatusCounts, TypeStat,
+    WorkflowFilter, WorkflowStatus,
+};
+use chrono::Utc;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -47,6 +52,8 @@ pub enum CliRequest {
         workflow_id: String,
         run_id: Option<String>,
     },
+    /// Run insights scan (list + sample histories + compute findings)
+    LoadInsights,
 }
 
 /// Worker that processes CLI requests sequentially
@@ -114,6 +121,7 @@ impl CliWorker {
                 workflow_id,
                 run_id,
             } => self.load_history(workflow_id, run_id).await,
+            CliRequest::LoadInsights => self.load_insights().await,
         }
     }
 
@@ -233,6 +241,84 @@ impl CliWorker {
         }
     }
 
+    /// Run insights scan: list workflows, compute list-level findings, sample histories, compute activity-level findings
+    async fn load_insights(&self) {
+        info!("CliWorker: Starting insights scan");
+        let scan_start = Utc::now();
+
+        // Step 1: Fetch workflows (fleet-level summary)
+        let workflows = match self.client.list(&WorkflowFilter::new(), 500).await {
+            Ok(wfs) => wfs,
+            Err(e) => {
+                error!("CliWorker: Failed to fetch workflows for insights: {}", e);
+                let _ = self.action_tx.send(Action::Error(e.to_string()));
+                return;
+            }
+        };
+        let workflows_scanned = workflows.len();
+        info!("CliWorker: Insights - fetched {} workflows", workflows_scanned);
+
+        // Step 2: Compute list-level findings
+        let mut all_findings = compute_list_findings(&workflows);
+
+        // Step 3: Select workflows for history sampling
+        let samples_to_fetch = select_workflows_for_sampling(
+            &workflows,
+            InsightThresholds::MAX_HISTORY_SAMPLES,
+        );
+
+        // Step 4: Fetch histories and correlate activities
+        let mut activity_samples: Vec<(String, Vec<crate::domain::ActivityExecution>)> = Vec::new();
+        for wf in &samples_to_fetch {
+            match self.client.get_history(&wf.workflow_id, Some(&wf.run_id)).await {
+                Ok(events) => {
+                    let activities = correlate_activities(&events);
+                    activity_samples.push((wf.workflow_id.clone(), activities));
+                }
+                Err(e) => {
+                    debug!(
+                        "CliWorker: Failed to fetch history for {}: {} (skipping)",
+                        wf.workflow_id, e
+                    );
+                    // Continue with other samples
+                }
+            }
+        }
+        let histories_fetched = activity_samples.len();
+        info!(
+            "CliWorker: Insights - fetched {} histories",
+            histories_fetched
+        );
+
+        // Step 5: Compute activity-level findings
+        let activity_findings = compute_activity_findings(&activity_samples);
+        all_findings.extend(activity_findings);
+
+        // Step 6: Rank all findings
+        let findings = rank_findings(all_findings);
+
+        let scan_end = Utc::now();
+        let scan_duration = scan_end - scan_start;
+
+        let result = InsightsResult {
+            findings,
+            workflows_scanned,
+            histories_fetched,
+            computed_at: scan_end,
+            scan_duration,
+        };
+
+        info!(
+            "CliWorker: Insights scan complete - {} findings, {:.1}s",
+            result.findings.len(),
+            scan_duration.num_milliseconds() as f64 / 1000.0
+        );
+
+        let _ = self
+            .action_tx
+            .send(Action::DataLoaded(DataPayload::Insights(result)));
+    }
+
     /// Cancel a running workflow
     async fn cancel_workflow(&self, workflow_id: String, run_id: Option<String>) {
         info!("Cancelling workflow: {}", workflow_id);
@@ -319,6 +405,11 @@ impl CliHandle {
             workflow_id,
             run_id,
         });
+    }
+
+    /// Run insights scan
+    pub fn load_insights(&self) {
+        let _ = self.send(CliRequest::LoadInsights);
     }
 
     /// Cancel a workflow

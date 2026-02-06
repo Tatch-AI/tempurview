@@ -25,7 +25,8 @@ pub use client::{
 };
 pub use config::{Config, ConfigError};
 pub use domain::{
-    ActivityExecution, ActivityStatus, FailureInfo, HistoryEvent, StatusCounts, WorkflowDetail,
+    ActivityExecution, ActivityStatus, FailureInfo, HistoryEvent, InsightCategory, InsightFinding,
+    InsightSeverity, InsightThresholds, InsightsResult, StatusCounts, WorkflowDetail,
     WorkflowFilter, WorkflowStatus, WorkflowSummary,
 };
 

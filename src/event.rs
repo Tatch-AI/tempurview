@@ -145,10 +145,14 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('T') if view == View::WorkflowList => {
                     Some(Action::ViewTypeList)
                 }
+                KeyCode::Char('I') if view == View::WorkflowList => {
+                    Some(Action::ViewInsights)
+                }
                 KeyCode::Enter => match view {
                     View::WorkflowList => Some(Action::ViewDetail),
                     View::TypeList => Some(Action::ViewDetail),
                     View::ActivityList => Some(Action::ToggleActivityDetail),
+                    View::Insights => Some(Action::ToggleInsightDetail),
                     View::WorkflowDetail => None,
                 },
                 KeyCode::Esc => Some(Action::GoBack),

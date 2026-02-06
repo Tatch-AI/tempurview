@@ -32,7 +32,8 @@ impl MockTemporalClient {
         client
     }
 
-    /// Generate realistic test data
+    /// Generate realistic test data with some deterministic patterns that
+    /// reliably trigger insight findings (failure hotspots, stuck workflows, etc.)
     pub fn with_random_data(count: usize) -> Self {
         let mut rng = rand::thread_rng();
         let mut workflows = Vec::with_capacity(count);
@@ -50,20 +51,44 @@ impl MockTemporalClient {
         let task_queues = ["default", "high-priority", "batch-processing", "background"];
 
         for i in 0..count {
-            let status = match rng.gen_range(0..100) {
-                0..=40 => WorkflowStatus::Completed,
-                41..=60 => WorkflowStatus::Running,
-                61..=75 => WorkflowStatus::Failed,
-                76..=85 => WorkflowStatus::Canceled,
-                86..=92 => WorkflowStatus::Terminated,
-                93..=97 => WorkflowStatus::TimedOut,
-                _ => WorkflowStatus::ContinuedAsNew,
+            let workflow_type = workflow_types[rng.gen_range(0..workflow_types.len())].to_string();
+
+            // PaymentProcessing: ~65% failure rate for insights "high failure rate" finding
+            let status = if workflow_type == "PaymentProcessingWorkflow" {
+                match rng.gen_range(0..100) {
+                    0..=25 => WorkflowStatus::Completed,
+                    26..=35 => WorkflowStatus::Running,
+                    _ => WorkflowStatus::Failed,
+                }
+            } else {
+                match rng.gen_range(0..100) {
+                    0..=40 => WorkflowStatus::Completed,
+                    41..=60 => WorkflowStatus::Running,
+                    61..=75 => WorkflowStatus::Failed,
+                    76..=85 => WorkflowStatus::Canceled,
+                    86..=92 => WorkflowStatus::Terminated,
+                    93..=97 => WorkflowStatus::TimedOut,
+                    _ => WorkflowStatus::ContinuedAsNew,
+                }
             };
 
-            let workflow_type = workflow_types[rng.gen_range(0..workflow_types.len())].to_string();
-            let task_queue = task_queues[rng.gen_range(0..task_queues.len())].to_string();
+            // Some Running workflows started many hours ago → stuck workflow finding
+            let task_queue = if workflow_type == "DataProcessingWorkflow"
+                && status == WorkflowStatus::Running
+            {
+                "batch-processing".to_string()
+            } else {
+                task_queues[rng.gen_range(0..task_queues.len())].to_string()
+            };
 
-            let start_offset = Duration::minutes(rng.gen_range(0..10080)); // Up to 7 days ago
+            let start_offset = if status == WorkflowStatus::Running
+                && workflow_type == "DataProcessingWorkflow"
+            {
+                // Make DataProcessing running workflows stuck (3-8 hours old)
+                Duration::hours(rng.gen_range(3..9))
+            } else {
+                Duration::minutes(rng.gen_range(0..10080))
+            };
             let start_time = Utc::now() - start_offset;
 
             let close_time = if status != WorkflowStatus::Running {
@@ -328,8 +353,28 @@ impl TemporalClient for MockTemporalClient {
                 continue;
             }
 
-            let start_time = sched_time + Duration::milliseconds(rng.gen_range(5..200));
-            let attempt: i32 = if outcome == 3 { rng.gen_range(1..=3) } else { 1 };
+            // Higher queue wait for batch-processing queue to trigger queue latency finding
+            let queue_wait_ms = if workflow.task_queue == "batch-processing" {
+                rng.gen_range(800..2500)
+            } else {
+                rng.gen_range(5..200)
+            };
+            let start_time = sched_time + Duration::milliseconds(queue_wait_ms);
+
+            // Higher retry counts for SendEmail/ProcessPayment to trigger retry storm
+            let attempt: i32 = if outcome == 3 {
+                if activity_type == "SendEmail" || activity_type == "ProcessPayment" {
+                    rng.gen_range(2..=5)
+                } else {
+                    rng.gen_range(1..=3)
+                }
+            } else if (activity_type == "SendEmail" || activity_type == "ProcessPayment")
+                && rng.gen_bool(0.3)
+            {
+                rng.gen_range(2..=4)
+            } else {
+                1
+            };
 
             // ActivityTaskStarted
             events.push(HistoryEvent {
