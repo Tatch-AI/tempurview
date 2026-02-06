@@ -1,7 +1,7 @@
 use crate::domain::{
     ActivityExecution, ActivityStatus, ChildWorkflowExecution, ChildWorkflowStatus,
-    InsightCategory, InsightFinding, InsightSeverity, InsightThresholds, WorkflowStatus,
-    WorkflowSummary,
+    InsightCategory, InsightFinding, InsightSeverity, InsightThresholds, InsightsConfig,
+    WorkflowStatus, WorkflowSummary,
 };
 use chrono::Utc;
 use std::collections::HashMap;
@@ -145,6 +145,7 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
 /// Implements: Retry Storm, Queue Latency, Activity Failure Hotspot, Long-Running Activity.
 pub fn compute_activity_findings(
     samples: &[(String, Vec<ActivityExecution>)],
+    config: &InsightsConfig,
 ) -> Vec<InsightFinding> {
     let mut findings = Vec::new();
     let now = Utc::now();
@@ -376,6 +377,7 @@ pub fn compute_activity_findings(
                 // Scan output
                 if let Some(ref output) = activity.output {
                     let output_str = output.to_string().to_lowercase();
+                    if !config.is_allowlisted(&output_str) {
                     for &pattern in patterns {
                         if output_str.contains(pattern) {
                             let snippet = extract_snippet(&output.to_string(), pattern);
@@ -388,10 +390,12 @@ pub fn compute_activity_findings(
                             break; // one match per activity output is enough
                         }
                     }
+                    }
                 }
                 // Scan input
                 if let Some(ref input) = activity.input {
                     let input_str = input.to_string().to_lowercase();
+                    if !config.is_allowlisted(&input_str) {
                     for &pattern in patterns {
                         if input_str.contains(pattern) {
                             let snippet = extract_snippet(&input.to_string(), pattern);
@@ -404,10 +408,12 @@ pub fn compute_activity_findings(
                             break;
                         }
                     }
+                    }
                 }
                 // Scan failure message (even on "completed" activities that had prior failures)
                 if let Some(ref failure) = activity.failure {
                     let msg_lower = failure.message.to_lowercase();
+                    if !config.is_allowlisted(&msg_lower) {
                     for &pattern in patterns {
                         if msg_lower.contains(pattern) {
                             matches.push((
@@ -418,6 +424,7 @@ pub fn compute_activity_findings(
                             ));
                             break;
                         }
+                    }
                     }
                 }
             }
@@ -765,7 +772,7 @@ pub fn rank_findings(mut findings: Vec<InsightFinding>) -> Vec<InsightFinding> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ActivityStatus, ChildWorkflowExecution, ChildWorkflowStatus, FailureInfo};
+    use crate::domain::{ActivityStatus, ChildWorkflowExecution, ChildWorkflowStatus, FailureInfo, InsightsConfig};
     use chrono::{Duration, TimeDelta};
 
     fn make_wf(id: &str, wf_type: &str, status: WorkflowStatus, hours_ago: i64) -> WorkflowSummary {
@@ -975,7 +982,7 @@ mod tests {
 
     #[test]
     fn test_activity_findings_empty() {
-        let findings = compute_activity_findings(&[]);
+        let findings = compute_activity_findings(&[], &InsightsConfig::default());
         assert!(findings.is_empty());
     }
 
@@ -987,7 +994,7 @@ mod tests {
             ("wf-3".to_string(), vec![make_activity("SendEmail", ActivityStatus::Failed, 2, Some(50), Some(5))]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let retry_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::RetryStorm)
@@ -1007,7 +1014,7 @@ mod tests {
             ("wf-3".to_string(), vec![make_activity("SendEmail", ActivityStatus::Failed, 5, Some(50), Some(5))]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let retry_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::RetryStorm)
@@ -1026,7 +1033,7 @@ mod tests {
             ("wf-3".to_string(), vec![make_activity("SendEmail", ActivityStatus::Completed, 1, Some(50), Some(5))]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let retry_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::RetryStorm)
@@ -1043,7 +1050,7 @@ mod tests {
             ("wf-3".to_string(), vec![make_activity("A", ActivityStatus::Completed, 1, Some(1800), Some(5))]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let latency_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::QueueLatency)
@@ -1061,7 +1068,7 @@ mod tests {
             ("wf-3".to_string(), vec![make_activity("A", ActivityStatus::Completed, 1, Some(5500), Some(5))]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let latency_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::QueueLatency)
@@ -1079,7 +1086,7 @@ mod tests {
             ("wf-3".to_string(), vec![make_activity("ValidateInput", ActivityStatus::Failed, 1, Some(50), Some(5))]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let failure_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::ActivityFailure)
@@ -1101,7 +1108,7 @@ mod tests {
             })
             .collect();
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let failure_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::ActivityFailure)
@@ -1119,7 +1126,7 @@ mod tests {
             vec![make_activity("ProcessPayment", ActivityStatus::Running, 1, Some(50), Some(45))],
         )];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let long_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::LongRunningActivity)
@@ -1137,7 +1144,7 @@ mod tests {
             vec![make_activity("ProcessPayment", ActivityStatus::Running, 1, Some(50), Some(150))],
         )];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let long_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::LongRunningActivity)
@@ -1243,7 +1250,7 @@ mod tests {
             ("wf-2".to_string(), vec![make_activity("SendEmail", ActivityStatus::Completed, 2, Some(50), Some(5))]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let retry_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::ActivityRetry)
@@ -1261,7 +1268,7 @@ mod tests {
             ("wf-2".to_string(), vec![make_activity("SendEmail", ActivityStatus::Completed, 1, Some(50), Some(5))]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let retry_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::ActivityRetry)
@@ -1284,7 +1291,7 @@ mod tests {
             ("wf-2".to_string(), vec![a2]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let error_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::ErrorInOutput)
@@ -1304,7 +1311,7 @@ mod tests {
             ("wf-1".to_string(), vec![a1]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let error_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::ErrorInOutput)
@@ -1326,7 +1333,7 @@ mod tests {
             ("wf-2".to_string(), vec![a2]),
         ];
 
-        let findings = compute_activity_findings(&samples);
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
         let error_findings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == InsightCategory::ErrorInOutput)
@@ -1334,6 +1341,52 @@ mod tests {
 
         assert_eq!(error_findings.len(), 1);
         assert!(error_findings[0].title.contains("ValidateInput"));
+    }
+
+    #[test]
+    fn test_error_in_output_suppressed_by_allowlist() {
+        let mut a1 = make_activity("ProcessClaim", ActivityStatus::Completed, 1, Some(50), Some(5));
+        a1.output = Some(serde_json::json!({"policy_type": "errors and omissions policy"}));
+        let mut a2 = make_activity("ProcessClaim", ActivityStatus::Completed, 1, Some(50), Some(5));
+        a2.output = Some(serde_json::json!({"policy_type": "errors and omissions coverage"}));
+
+        let samples = vec![
+            ("wf-1".to_string(), vec![a1]),
+            ("wf-2".to_string(), vec![a2]),
+        ];
+
+        let config = InsightsConfig {
+            allowlist: vec!["errors and omissions".to_string()],
+        };
+
+        let findings = compute_activity_findings(&samples, &config);
+        let error_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ErrorInOutput)
+            .collect();
+
+        assert!(error_findings.is_empty(), "Allowlisted phrase should suppress ErrorInOutput finding");
+    }
+
+    #[test]
+    fn test_error_in_output_not_suppressed_without_allowlist() {
+        let mut a1 = make_activity("ProcessClaim", ActivityStatus::Completed, 1, Some(50), Some(5));
+        a1.output = Some(serde_json::json!({"policy_type": "errors and omissions policy"}));
+        let mut a2 = make_activity("ProcessClaim", ActivityStatus::Completed, 1, Some(50), Some(5));
+        a2.output = Some(serde_json::json!({"policy_type": "errors and omissions coverage"}));
+
+        let samples = vec![
+            ("wf-1".to_string(), vec![a1]),
+            ("wf-2".to_string(), vec![a2]),
+        ];
+
+        let findings = compute_activity_findings(&samples, &InsightsConfig::default());
+        let error_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ErrorInOutput)
+            .collect();
+
+        assert_eq!(error_findings.len(), 1, "Without allowlist, ErrorInOutput should be produced");
     }
 
     #[test]

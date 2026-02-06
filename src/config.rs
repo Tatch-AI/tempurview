@@ -1,5 +1,8 @@
+use crate::domain::InsightsConfig;
+use serde::Deserialize;
 use std::time::Duration;
 use thiserror::Error;
+use tracing::warn;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -21,6 +24,7 @@ pub struct Config {
     pub tick_rate: Duration,
     pub use_mock: bool,
     pub mock_workflow_count: usize,
+    pub insights: InsightsConfig,
 }
 
 impl Default for Config {
@@ -34,6 +38,7 @@ impl Default for Config {
             tick_rate: Duration::from_millis(250),
             use_mock: false,
             mock_workflow_count: 100,
+            insights: InsightsConfig::default(),
         }
     }
 }
@@ -70,6 +75,8 @@ impl Config {
                     ConfigError::InvalidValue("TEMPORAL_TUI_TICK_RATE".into(), val)
                 })?);
         }
+
+        config.insights = load_insights_config();
 
         Ok(config)
     }
@@ -120,6 +127,41 @@ impl Config {
     }
 }
 
+#[derive(Deserialize, Default)]
+struct ConfigFile {
+    #[serde(default)]
+    insights: InsightsSection,
+}
+
+#[derive(Deserialize, Default)]
+struct InsightsSection {
+    #[serde(default)]
+    allowlist: Vec<String>,
+}
+
+fn load_insights_config() -> InsightsConfig {
+    let config_dir = dirs::home_dir().map(|h| h.join(".tempurview"));
+    let path = match config_dir {
+        Some(d) => d.join("config.toml"),
+        None => return InsightsConfig::default(),
+    };
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return InsightsConfig::default(),
+    };
+
+    match toml::from_str::<ConfigFile>(&content) {
+        Ok(cf) => InsightsConfig {
+            allowlist: cf.insights.allowlist,
+        },
+        Err(e) => {
+            warn!("Failed to parse {}: {}", path.display(), e);
+            InsightsConfig::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +185,13 @@ mod tests {
         let args = vec!["--address".to_string(), "custom:7233".to_string()];
         let config = Config::from_args(&args).unwrap();
         assert_eq!(config.temporal_address, "custom:7233");
+    }
+
+    #[test]
+    fn test_load_insights_config_missing_file() {
+        // load_insights_config gracefully returns default when file is missing
+        let config = load_insights_config();
+        assert!(config.allowlist.is_empty());
     }
 
     #[test]

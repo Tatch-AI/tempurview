@@ -147,7 +147,7 @@ async fn main() -> color_eyre::Result<()> {
 
     // Create CLI worker for serialized request execution
     let (request_tx, request_rx) = mpsc::unbounded_channel::<CliRequest>();
-    let cli_worker = CliWorker::new(client.clone(), request_rx, action_tx.clone());
+    let cli_worker = CliWorker::new(client.clone(), request_rx, action_tx.clone(), config.insights.clone());
     let _worker_handle = cli_worker.spawn();
     let cli_handle = CliHandle::new(request_tx);
 

@@ -44,6 +44,9 @@ tracing-appender = "0.2"
 # Home directory
 dirs = "5"
 
+# TOML config file parsing
+toml = "0.8"
+
 # gRPC client
 tonic = { version = "0.12", features = ["tls", "tls-roots"] }
 prost = "0.13"

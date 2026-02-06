@@ -94,6 +94,25 @@ pub struct InsightsResult {
     pub scan_duration: TimeDelta,
 }
 
+/// User-configurable settings for insights analysis.
+/// Loaded from ~/.tempurview/config.toml [insights] section.
+#[derive(Debug, Clone, Default)]
+pub struct InsightsConfig {
+    /// Phrases that suppress error-pattern matches (case-insensitive).
+    /// If any allowlisted phrase appears in the same text as an error pattern,
+    /// the match is skipped.
+    pub allowlist: Vec<String>,
+}
+
+impl InsightsConfig {
+    pub fn is_allowlisted(&self, text: &str) -> bool {
+        let text_lower = text.to_lowercase();
+        self.allowlist
+            .iter()
+            .any(|phrase| text_lower.contains(phrase.to_lowercase().as_str()))
+    }
+}
+
 /// Threshold constants for insight detection
 pub struct InsightThresholds;
 
@@ -189,5 +208,29 @@ mod tests {
         assert_eq!(InsightCategory::ErrorInOutput.label(), "Error in I/O");
         assert_eq!(InsightCategory::ChildWorkflowFailure.label(), "Child WF Failure");
         assert_eq!(InsightCategory::ChildWorkflowLatency.label(), "Child WF Latency");
+    }
+
+    #[test]
+    fn test_allowlist_empty_allows_everything() {
+        let config = InsightsConfig::default();
+        assert!(!config.is_allowlisted("some text with error in it"));
+    }
+
+    #[test]
+    fn test_allowlist_matches_case_insensitive() {
+        let config = InsightsConfig {
+            allowlist: vec!["errors and omissions".to_string()],
+        };
+        assert!(config.is_allowlisted("reviewing errors and omissions policy"));
+        assert!(config.is_allowlisted("reviewing Errors and Omissions policy"));
+        assert!(config.is_allowlisted("reviewing ERRORS AND OMISSIONS policy"));
+    }
+
+    #[test]
+    fn test_allowlist_no_match() {
+        let config = InsightsConfig {
+            allowlist: vec!["errors and omissions".to_string()],
+        };
+        assert!(!config.is_allowlisted("there was an error in processing"));
     }
 }

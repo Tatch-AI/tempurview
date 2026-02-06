@@ -8,8 +8,8 @@ use crate::client::TemporalClient;
 use crate::domain::{
     compute_activity_findings, compute_child_workflow_findings, compute_list_findings,
     correlate_activities, correlate_child_workflows, rank_findings,
-    select_workflows_for_sampling, InsightThresholds, InsightsResult, StatusCounts, TypeStat,
-    WorkflowFilter, WorkflowStatus,
+    select_workflows_for_sampling, InsightThresholds, InsightsConfig, InsightsResult, StatusCounts,
+    TypeStat, WorkflowFilter, WorkflowStatus,
 };
 use chrono::Utc;
 use std::sync::Arc;
@@ -65,6 +65,7 @@ pub struct CliWorker {
     client: Arc<dyn TemporalClient>,
     request_rx: mpsc::UnboundedReceiver<CliRequest>,
     action_tx: mpsc::UnboundedSender<Action>,
+    insights_config: InsightsConfig,
 }
 
 impl CliWorker {
@@ -73,11 +74,13 @@ impl CliWorker {
         client: Arc<dyn TemporalClient>,
         request_rx: mpsc::UnboundedReceiver<CliRequest>,
         action_tx: mpsc::UnboundedSender<Action>,
+        insights_config: InsightsConfig,
     ) -> Self {
         Self {
             client,
             request_rx,
             action_tx,
+            insights_config,
         }
     }
 
@@ -318,7 +321,7 @@ impl CliWorker {
         );
 
         // Step 5: Compute activity-level findings
-        let activity_findings = compute_activity_findings(&activity_samples);
+        let activity_findings = compute_activity_findings(&activity_samples, &self.insights_config);
         all_findings.extend(activity_findings);
 
         // Step 5b: Compute child workflow findings
@@ -465,6 +468,7 @@ impl CliHandle {
 mod tests {
     use super::*;
     use crate::client::MockTemporalClient;
+    use crate::domain::InsightsConfig;
     use tokio::time::{timeout, Duration};
 
     #[tokio::test]
@@ -473,7 +477,7 @@ mod tests {
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         let (action_tx, mut action_rx) = mpsc::unbounded_channel();
 
-        let worker = CliWorker::new(client, request_rx, action_tx);
+        let worker = CliWorker::new(client, request_rx, action_tx, InsightsConfig::default());
         let _handle = worker.spawn();
 
         let cli_handle = CliHandle::new(request_tx);
@@ -496,7 +500,7 @@ mod tests {
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         let (action_tx, mut action_rx) = mpsc::unbounded_channel();
 
-        let worker = CliWorker::new(client, request_rx, action_tx);
+        let worker = CliWorker::new(client, request_rx, action_tx, InsightsConfig::default());
         let _handle = worker.spawn();
 
         let cli_handle = CliHandle::new(request_tx);
