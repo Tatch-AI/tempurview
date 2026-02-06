@@ -9,4 +9,4 @@ branches:
 publish: false
 
 # Run tests before creating a release
-pre-run: cargo test --lib
+preRun: cargo test --lib
