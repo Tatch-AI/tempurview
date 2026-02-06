@@ -102,6 +102,9 @@ async fn main() -> color_eyre::Result<()> {
                     )
                     .await
                 }
+                tempurview::cli::Commands::Serve { port, bind } => {
+                    tempurview::web::run_server(client, config, &bind, port).await
+                }
                 // Already handled above
                 tempurview::cli::Commands::TestConnection
                 | tempurview::cli::Commands::Config { .. } => unreachable!(),

@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tempurview</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+  <style>
+    :root {
+      --status-running: #3b82f6;
+      --status-completed: #22c55e;
+      --status-failed: #ef4444;
+      --status-canceled: #eab308;
+      --status-terminated: #a855f7;
+      --status-timedout: #f97316;
+      --status-continuedasnew: #06b6d4;
+    }
+    body { padding-top: 0.5rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #fff;
+      white-space: nowrap;
+    }
+    .badge-running       { background: var(--status-running); }
+    .badge-completed     { background: var(--status-completed); }
+    .badge-failed        { background: var(--status-failed); }
+    .badge-canceled      { background: var(--status-canceled); color: #000; }
+    .badge-terminated    { background: var(--status-terminated); }
+    .badge-timedout      { background: var(--status-timedout); }
+    .badge-continuedasnew { background: var(--status-continuedasnew); }
+
+    .severity-critical { color: var(--status-failed); font-weight: bold; }
+    .severity-warning  { color: var(--status-canceled); font-weight: bold; }
+    .severity-info     { color: var(--status-continuedasnew); }
+
+    nav h1 { margin: 0; font-size: 1.25rem; }
+    nav small { opacity: 0.7; }
+    .clickable { cursor: pointer; }
+    .clickable:hover { background: rgba(255,255,255,0.05); }
+    table { font-size: 0.875rem; }
+    .mono { font-family: monospace; font-size: 0.8rem; }
+    .breadcrumb { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; font-size: 0.875rem; }
+    .breadcrumb a { cursor: pointer; text-decoration: underline; }
+    .breadcrumb span { opacity: 0.5; }
+    .filter-bar { display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; margin-bottom: 1rem; }
+    .filter-bar label { margin-bottom: 0; font-size: 0.8rem; }
+    .filter-bar select, .filter-bar input { margin-bottom: 0; padding: 0.35rem 0.5rem; font-size: 0.85rem; }
+    .detail-grid { display: grid; grid-template-columns: 10rem 1fr; gap: 0.25rem 1rem; font-size: 0.875rem; }
+    .detail-grid dt { font-weight: 600; opacity: 0.8; }
+    .detail-grid dd { margin: 0; word-break: break-all; }
+    pre.json-block {
+      background: rgba(0,0,0,0.3);
+      padding: 0.75rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.8rem;
+      max-height: 20rem;
+    }
+    .loading { text-align: center; padding: 2rem; opacity: 0.6; }
+    .error-box { background: rgba(239,68,68,0.15); border: 1px solid var(--status-failed); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; }
+    .tab-bar { display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 2px solid rgba(255,255,255,0.1); }
+    .tab-bar button {
+      background: none; border: none; padding: 0.5rem 1rem; cursor: pointer;
+      font-size: 0.875rem; opacity: 0.6; border-bottom: 2px solid transparent;
+      margin-bottom: -2px; color: inherit;
+    }
+    .tab-bar button.active { opacity: 1; border-bottom-color: var(--status-running); }
+    .tab-bar button:hover { opacity: 0.9; }
+    .stat-cards { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .stat-card {
+      padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.8rem;
+      background: rgba(255,255,255,0.05); min-width: 5rem; text-align: center;
+    }
+    .stat-card .num { font-size: 1.25rem; font-weight: 700; }
+  </style>
+</head>
+<body>
+
+<main class="container" x-data="app()" x-init="init()">
+
+  <!-- Header -->
+  <nav style="margin-bottom: 1rem;">
+    <ul>
+      <li><h1>Tempurview <small>Web UI</small></h1></li>
+    </ul>
+    <ul>
+      <li><small x-text="lastFetch ? 'Updated ' + timeAgo(lastFetch) : ''"></small></li>
+    </ul>
+  </nav>
+
+  <!-- Error -->
+  <div class="error-box" x-show="error" x-cloak>
+    <strong>Error:</strong> <span x-text="error"></span>
+  </div>
+
+  <!-- ============ WORKFLOW LIST VIEW ============ -->
+  <template x-if="view === 'list'">
+    <div>
+      <!-- Filters -->
+      <div class="filter-bar">
+        <div>
+          <label>Status</label>
+          <select x-model="filters.status" @change="fetchWorkflows()">
+            <option value="">All</option>
+            <option value="Running">Running</option>
+            <option value="Completed">Completed</option>
+            <option value="Failed">Failed</option>
+            <option value="Canceled">Canceled</option>
+            <option value="Terminated">Terminated</option>
+            <option value="TimedOut">Timed Out</option>
+            <option value="ContinuedAsNew">Continued As New</option>
+          </select>
+        </div>
+        <div>
+          <label>Workflow Type</label>
+          <input type="text" x-model="filters.workflow_type" placeholder="e.g. OrderWorkflow"
+                 @keydown.enter="fetchWorkflows()">
+        </div>
+        <div>
+          <label>Since</label>
+          <input type="text" x-model="filters.since" placeholder="e.g. 24h, 7d"
+                 @keydown.enter="fetchWorkflows()">
+        </div>
+        <div>
+          <label>Before</label>
+          <input type="text" x-model="filters.before" placeholder="e.g. 2024-01-15"
+                 @keydown.enter="fetchWorkflows()">
+        </div>
+        <div>
+          <label>Limit</label>
+          <input type="number" x-model.number="filters.limit" min="1" max="1000" style="width: 5rem;"
+                 @keydown.enter="fetchWorkflows()">
+        </div>
+        <div>
+          <button @click="fetchWorkflows()" class="outline" style="margin-bottom: 0;">Search</button>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stat-cards" x-show="workflows.length">
+        <div class="stat-card">
+          <div class="num" x-text="workflows.length"></div>
+          <div>Total</div>
+        </div>
+        <template x-for="s in statusCounts" :key="s.status">
+          <div class="stat-card" x-show="s.count > 0">
+            <div class="num" x-text="s.count"></div>
+            <div><span class="badge" :class="'badge-' + s.status.toLowerCase()" x-text="s.status"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Table -->
+      <div x-show="loading" class="loading">Loading workflows...</div>
+      <table x-show="!loading && workflows.length" role="grid">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Workflow ID</th>
+            <th>Type</th>
+            <th>Start Time</th>
+            <th>Duration</th>
+            <th>Task Queue</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="wf in workflows" :key="wf.workflow_id + wf.run_id">
+            <tr class="clickable" @click="openWorkflow(wf.workflow_id, wf.run_id)">
+              <td><span class="badge" :class="'badge-' + wf.status.toLowerCase()" x-text="wf.status"></span></td>
+              <td class="mono" x-text="truncate(wf.workflow_id, 40)"></td>
+              <td x-text="wf.workflow_type"></td>
+              <td x-text="formatTime(wf.start_time)"></td>
+              <td x-text="duration(wf.start_time, wf.close_time)"></td>
+              <td class="mono" x-text="wf.task_queue"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <p x-show="!loading && !workflows.length && !error">No workflows found.</p>
+
+      <!-- Insights button -->
+      <hr>
+      <button @click="openInsights()" class="outline secondary">Run Insights Scan</button>
+    </div>
+  </template>
+
+  <!-- ============ WORKFLOW DETAIL VIEW ============ -->
+  <template x-if="view === 'detail'">
+    <div>
+      <div class="breadcrumb">
+        <a @click="goBack()">Workflows</a>
+        <span>/</span>
+        <span x-text="truncate(detail?.summary?.workflow_id || '', 50)"></span>
+      </div>
+
+      <div x-show="loading" class="loading">Loading detail...</div>
+
+      <template x-if="detail && !loading">
+        <div>
+          <div class="tab-bar">
+            <button :class="{ active: detailTab === 'overview' }" @click="detailTab = 'overview'">Overview</button>
+            <button :class="{ active: detailTab === 'activities' }" @click="detailTab = 'activities'; fetchActivities()">Activities</button>
+            <button :class="{ active: detailTab === 'events' }" @click="detailTab = 'events'; fetchEvents()">Events</button>
+          </div>
+
+          <!-- Overview tab -->
+          <template x-if="detailTab === 'overview'">
+            <div>
+              <dl class="detail-grid">
+                <dt>Status</dt>
+                <dd><span class="badge" :class="'badge-' + detail.summary.status.toLowerCase()" x-text="detail.summary.status"></span></dd>
+                <dt>Workflow ID</dt>
+                <dd class="mono" x-text="detail.summary.workflow_id"></dd>
+                <dt>Run ID</dt>
+                <dd class="mono" x-text="detail.summary.run_id"></dd>
+                <dt>Type</dt>
+                <dd x-text="detail.summary.workflow_type"></dd>
+                <dt>Task Queue</dt>
+                <dd class="mono" x-text="detail.summary.task_queue"></dd>
+                <dt>Start Time</dt>
+                <dd x-text="formatTime(detail.summary.start_time)"></dd>
+                <dt>Close Time</dt>
+                <dd x-text="detail.summary.close_time ? formatTime(detail.summary.close_time) : '-'"></dd>
+                <dt>Duration</dt>
+                <dd x-text="duration(detail.summary.start_time, detail.summary.close_time)"></dd>
+                <dt>History Length</dt>
+                <dd x-text="detail.history_length"></dd>
+              </dl>
+
+              <template x-if="detail.failure">
+                <div style="margin-top: 1rem;">
+                  <h4>Failure</h4>
+                  <div class="error-box">
+                    <strong x-text="detail.failure.failure_type"></strong>: <span x-text="detail.failure.message"></span>
+                    <pre class="json-block" x-show="detail.failure.stack_trace" x-text="detail.failure.stack_trace"></pre>
+                  </div>
+                </div>
+              </template>
+
+              <template x-if="detail.input !== null && detail.input !== undefined">
+                <div style="margin-top: 1rem;">
+                  <h4>Input</h4>
+                  <pre class="json-block" x-text="formatJson(detail.input)"></pre>
+                </div>
+              </template>
+
+              <template x-if="detail.output !== null && detail.output !== undefined">
+                <div style="margin-top: 1rem;">
+                  <h4>Output</h4>
+                  <pre class="json-block" x-text="formatJson(detail.output)"></pre>
+                </div>
+              </template>
+
+              <template x-if="detail.memo && Object.keys(detail.memo).length">
+                <div style="margin-top: 1rem;">
+                  <h4>Memo</h4>
+                  <pre class="json-block" x-text="formatJson(detail.memo)"></pre>
+                </div>
+              </template>
+
+              <template x-if="detail.search_attributes && Object.keys(detail.search_attributes).length">
+                <div style="margin-top: 1rem;">
+                  <h4>Search Attributes</h4>
+                  <pre class="json-block" x-text="formatJson(detail.search_attributes)"></pre>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- Activities tab -->
+          <template x-if="detailTab === 'activities'">
+            <div>
+              <div x-show="activitiesLoading" class="loading">Loading activities...</div>
+              <table x-show="!activitiesLoading && activities.length" role="grid">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Activity Type</th>
+                    <th>Activity ID</th>
+                    <th>Attempt</th>
+                    <th>Started</th>
+                    <th>Duration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="a in activities" :key="a.scheduled_event_id">
+                    <tr>
+                      <td><span class="badge" :class="'badge-' + a.status.toLowerCase()" x-text="a.status"></span></td>
+                      <td x-text="a.activity_type"></td>
+                      <td class="mono" x-text="a.activity_id"></td>
+                      <td x-text="a.attempt"></td>
+                      <td x-text="a.started_time ? formatTime(a.started_time) : '-'"></td>
+                      <td x-text="a.duration_ms !== null ? (a.duration_ms / 1000).toFixed(1) + 's' : '-'"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p x-show="!activitiesLoading && !activities.length">No activities found.</p>
+            </div>
+          </template>
+
+          <!-- Events tab -->
+          <template x-if="detailTab === 'events'">
+            <div>
+              <div x-show="eventsLoading" class="loading">Loading events...</div>
+              <table x-show="!eventsLoading && events.length" role="grid">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Event Type</th>
+                    <th>Timestamp</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="e in events" :key="e.event_id">
+                    <tr>
+                      <td x-text="e.event_id"></td>
+                      <td class="mono" x-text="e.event_type"></td>
+                      <td x-text="formatTime(e.timestamp)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p x-show="!eventsLoading && !events.length">No events found.</p>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <!-- ============ INSIGHTS VIEW ============ -->
+  <template x-if="view === 'insights'">
+    <div>
+      <div class="breadcrumb">
+        <a @click="goBack()">Workflows</a>
+        <span>/</span>
+        <span>Insights</span>
+      </div>
+
+      <div class="filter-bar">
+        <div>
+          <label>Since</label>
+          <input type="text" x-model="insightFilters.since" placeholder="e.g. 24h, 7d"
+                 @keydown.enter="fetchInsights()">
+        </div>
+        <div>
+          <label>Before</label>
+          <input type="text" x-model="insightFilters.before" placeholder="e.g. 2024-01-15"
+                 @keydown.enter="fetchInsights()">
+        </div>
+        <div>
+          <button @click="fetchInsights()" class="outline" style="margin-bottom: 0;">Scan</button>
+        </div>
+      </div>
+
+      <div x-show="insightsLoading" class="loading">Running insights scan... this may take a moment.</div>
+
+      <template x-if="insightsResult && !insightsLoading">
+        <div>
+          <div class="stat-cards">
+            <div class="stat-card">
+              <div class="num" x-text="insightsResult.workflows_scanned"></div>
+              <div>Scanned</div>
+            </div>
+            <div class="stat-card">
+              <div class="num" x-text="insightsResult.histories_fetched"></div>
+              <div>Histories</div>
+            </div>
+            <div class="stat-card">
+              <div class="num" x-text="insightsResult.findings.length"></div>
+              <div>Findings</div>
+            </div>
+          </div>
+
+          <table x-show="insightsResult.findings.length" role="grid">
+            <thead>
+              <tr>
+                <th>Severity</th>
+                <th>Category</th>
+                <th>Title</th>
+                <th>Affected</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="(f, idx) in insightsResult.findings" :key="idx">
+                <tr class="clickable" @click="selectedInsight = (selectedInsight === idx ? null : idx)">
+                  <td><span :class="'severity-' + f.severity" x-text="f.severity.toUpperCase()"></span></td>
+                  <td x-text="f.category"></td>
+                  <td x-text="f.title"></td>
+                  <td x-text="f.affected_entities.length"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+
+          <!-- Insight detail (expandable) -->
+          <template x-if="selectedInsight !== null && insightsResult.findings[selectedInsight]">
+            <div style="margin-top: 1rem; padding: 1rem; background: rgba(255,255,255,0.03); border-radius: 8px;">
+              <h4 x-text="insightsResult.findings[selectedInsight].title"></h4>
+              <p x-text="insightsResult.findings[selectedInsight].detail" style="white-space: pre-wrap;"></p>
+              <template x-if="insightsResult.findings[selectedInsight].affected_entities.length">
+                <div>
+                  <strong>Affected entities:</strong>
+                  <ul>
+                    <template x-for="e in insightsResult.findings[selectedInsight].affected_entities" :key="e">
+                      <li class="mono" x-text="e"></li>
+                    </template>
+                  </ul>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <p x-show="!insightsResult.findings.length">No findings. Everything looks healthy.</p>
+        </div>
+      </template>
+    </div>
+  </template>
+
+</main>
+
+<script>
+function app() {
+  return {
+    // State
+    view: 'list',
+    loading: false,
+    error: null,
+    lastFetch: null,
+
+    // Workflow list
+    workflows: [],
+    filters: { status: '', workflow_type: '', since: '', before: '', limit: 50 },
+
+    // Workflow detail
+    detail: null,
+    detailTab: 'overview',
+    currentWorkflowId: '',
+    currentRunId: '',
+
+    // Activities
+    activities: [],
+    activitiesLoading: false,
+
+    // Events
+    events: [],
+    eventsLoading: false,
+
+    // Insights
+    insightsResult: null,
+    insightsLoading: false,
+    insightFilters: { since: '', before: '' },
+    selectedInsight: null,
+
+    // Computed
+    get statusCounts() {
+      const counts = {};
+      for (const wf of this.workflows) {
+        counts[wf.status] = (counts[wf.status] || 0) + 1;
+      }
+      return Object.entries(counts).map(([status, count]) => ({ status, count }))
+        .sort((a, b) => b.count - a.count);
+    },
+
+    // Lifecycle
+    async init() {
+      await this.fetchWorkflows();
+    },
+
+    // API calls
+    async fetchWorkflows() {
+      this.loading = true;
+      this.error = null;
+      try {
+        const params = new URLSearchParams();
+        if (this.filters.status) params.set('status', this.filters.status);
+        if (this.filters.workflow_type) params.set('workflow_type', this.filters.workflow_type);
+        if (this.filters.since) params.set('since', this.filters.since);
+        if (this.filters.before) params.set('before', this.filters.before);
+        if (this.filters.limit) params.set('limit', this.filters.limit);
+        const res = await fetch('/api/workflows?' + params);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        this.workflows = data.workflows;
+        this.lastFetch = new Date();
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async openWorkflow(id, runId) {
+      this.view = 'detail';
+      this.detailTab = 'overview';
+      this.detail = null;
+      this.activities = [];
+      this.events = [];
+      this.currentWorkflowId = id;
+      this.currentRunId = runId;
+      this.loading = true;
+      this.error = null;
+      try {
+        const params = new URLSearchParams();
+        if (runId) params.set('run_id', runId);
+        const res = await fetch(`/api/workflows/${encodeURIComponent(id)}?` + params);
+        if (!res.ok) throw new Error(await res.text());
+        this.detail = await res.json();
+        this.lastFetch = new Date();
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async fetchActivities() {
+      if (this.activities.length) return;
+      this.activitiesLoading = true;
+      try {
+        const params = new URLSearchParams();
+        if (this.currentRunId) params.set('run_id', this.currentRunId);
+        const res = await fetch(`/api/workflows/${encodeURIComponent(this.currentWorkflowId)}/activities?` + params);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        this.activities = data.activities;
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.activitiesLoading = false;
+      }
+    },
+
+    async fetchEvents() {
+      if (this.events.length) return;
+      this.eventsLoading = true;
+      try {
+        const params = new URLSearchParams();
+        if (this.currentRunId) params.set('run_id', this.currentRunId);
+        const res = await fetch(`/api/workflows/${encodeURIComponent(this.currentWorkflowId)}/events?` + params);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        this.events = data.events;
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.eventsLoading = false;
+      }
+    },
+
+    async openInsights() {
+      this.view = 'insights';
+      this.insightsResult = null;
+      this.selectedInsight = null;
+      await this.fetchInsights();
+    },
+
+    async fetchInsights() {
+      this.insightsLoading = true;
+      this.error = null;
+      this.selectedInsight = null;
+      try {
+        const params = new URLSearchParams();
+        if (this.insightFilters.since) params.set('since', this.insightFilters.since);
+        if (this.insightFilters.before) params.set('before', this.insightFilters.before);
+        if (this.filters.limit) params.set('limit', this.filters.limit);
+        const res = await fetch('/api/insights?' + params);
+        if (!res.ok) throw new Error(await res.text());
+        this.insightsResult = await res.json();
+        this.lastFetch = new Date();
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.insightsLoading = false;
+      }
+    },
+
+    // Navigation
+    goBack() {
+      this.view = 'list';
+      this.error = null;
+    },
+
+    // Formatting helpers
+    truncate(s, n) {
+      return s.length > n ? s.slice(0, n) + '...' : s;
+    },
+
+    formatTime(iso) {
+      if (!iso) return '-';
+      const d = new Date(iso);
+      return d.toLocaleString();
+    },
+
+    duration(start, end) {
+      if (!start) return '-';
+      const s = new Date(start);
+      const e = end ? new Date(end) : new Date();
+      const ms = e - s;
+      if (ms < 1000) return ms + 'ms';
+      if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+      if (ms < 3600000) return (ms / 60000).toFixed(1) + 'm';
+      if (ms < 86400000) return (ms / 3600000).toFixed(1) + 'h';
+      return (ms / 86400000).toFixed(1) + 'd';
+    },
+
+    timeAgo(date) {
+      const s = Math.floor((new Date() - date) / 1000);
+      if (s < 5) return 'just now';
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      return Math.floor(s / 3600) + 'h ago';
+    },
+
+    formatJson(obj) {
+      try { return JSON.stringify(obj, null, 2); }
+      catch { return String(obj); }
+    },
+  };
+}
+</script>
+</body>
+</html>

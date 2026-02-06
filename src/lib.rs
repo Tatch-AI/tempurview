@@ -16,6 +16,7 @@ pub mod logging;
 pub mod output;
 pub mod proto;
 pub mod tui;
+pub mod web;
 pub mod widgets;
 
 // Re-export commonly used types at the crate root for convenience

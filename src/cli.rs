@@ -84,6 +84,16 @@ pub enum Commands {
     },
     /// Test connection to Temporal server
     TestConnection,
+    /// Start a web UI server
+    Serve {
+        /// Port to listen on
+        #[arg(long, default_value_t = 3000)]
+        port: u16,
+
+        /// Address to bind to
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+    },
 }
 
 #[derive(Subcommand)]
