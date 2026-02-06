@@ -1,8 +1,10 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use ratatui::style::Color;
+use serde::Serialize;
 
 /// Severity level for an insight finding
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InsightSeverity {
     Info,
     Warning,
@@ -34,7 +36,8 @@ impl std::fmt::Display for InsightSeverity {
 }
 
 /// Category of an insight finding
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InsightCategory {
     FailureRate,
     RetryStorm,
@@ -74,7 +77,7 @@ impl std::fmt::Display for InsightCategory {
 }
 
 /// A single insight finding
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct InsightFinding {
     pub severity: InsightSeverity,
     pub category: InsightCategory,
@@ -87,13 +90,21 @@ pub struct InsightFinding {
 }
 
 /// Result of an insights scan
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct InsightsResult {
     pub findings: Vec<InsightFinding>,
     pub workflows_scanned: usize,
     pub histories_fetched: usize,
     pub computed_at: DateTime<Utc>,
+    #[serde(serialize_with = "serde_timedelta_ms")]
     pub scan_duration: TimeDelta,
+}
+
+fn serde_timedelta_ms<S: serde::Serializer>(
+    value: &TimeDelta,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    s.serialize_i64(value.num_milliseconds())
 }
 
 /// User-configurable settings for insights analysis.

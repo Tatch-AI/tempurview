@@ -5,12 +5,15 @@
 
 pub mod action;
 pub mod app;
+pub mod cli;
 pub mod cli_worker;
 pub mod client;
+pub mod commands;
 pub mod config;
 pub mod domain;
 pub mod event;
 pub mod logging;
+pub mod output;
 pub mod proto;
 pub mod tui;
 pub mod widgets;

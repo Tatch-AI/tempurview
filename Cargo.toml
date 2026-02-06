@@ -47,6 +47,12 @@ dirs = "5"
 # TOML config file parsing
 toml = "0.8"
 
+# CLI argument parsing
+clap = { version = "4", features = ["derive", "env"] }
+
+# Table output for CLI mode
+comfy-table = "7"
+
 # gRPC client
 tonic = { version = "0.12", features = ["tls", "tls-roots"] }
 prost = "0.13"

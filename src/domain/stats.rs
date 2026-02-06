@@ -1,4 +1,5 @@
 use super::{WorkflowStatus, WorkflowSummary};
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Sort direction for table columns
@@ -33,7 +34,7 @@ pub enum TypeListColumn {
 }
 
 /// Per-type workflow statistics with status breakdown
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TypeStat {
     pub workflow_type: String,
     pub total: u64,
@@ -69,7 +70,7 @@ impl TypeStat {
 }
 
 /// Aggregated workflow counts by status
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct StatusCounts {
     counts: HashMap<WorkflowStatus, u64>,
 }

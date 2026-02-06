@@ -125,6 +125,21 @@ impl Config {
 
         Ok(config)
     }
+
+    /// Build config from clap-parsed GlobalArgs, merging with env vars.
+    pub fn from_global_args(global: &crate::cli::GlobalArgs) -> Result<Self, ConfigError> {
+        let mut config = Self::from_env()?;
+        config.use_mock = global.mock;
+        config.mock_workflow_count = global.mock_count;
+        config.default_limit = global.limit;
+        if let Some(ref addr) = global.address {
+            config.temporal_address = addr.clone();
+        }
+        if let Some(ref ns) = global.namespace {
+            config.temporal_namespace = ns.clone();
+        }
+        Ok(config)
+    }
 }
 
 #[derive(Deserialize, Default)]

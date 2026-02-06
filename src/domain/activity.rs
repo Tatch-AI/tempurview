@@ -1,10 +1,12 @@
 use crate::domain::{FailureInfo, HistoryEvent};
 use chrono::{DateTime, TimeDelta, Utc};
 use ratatui::style::Color;
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Status of an activity execution
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ActivityStatus {
     Scheduled,
     Running,
@@ -45,7 +47,7 @@ impl std::fmt::Display for ActivityStatus {
 }
 
 /// A correlated activity execution (built from multiple history events)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ActivityExecution {
     pub activity_id: String,
     pub activity_type: String,
@@ -58,8 +60,11 @@ pub struct ActivityExecution {
     pub closed_time: Option<DateTime<Utc>>,
 
     // Computed durations
+    #[serde(serialize_with = "serde_opt_timedelta_ms")]
     pub queue_wait: Option<TimeDelta>,
+    #[serde(serialize_with = "serde_opt_timedelta_ms")]
     pub execution_time: Option<TimeDelta>,
+    #[serde(serialize_with = "serde_opt_timedelta_ms")]
     pub total_time: Option<TimeDelta>,
 
     // Attempt/retry info
@@ -74,6 +79,16 @@ pub struct ActivityExecution {
     pub scheduled_event_id: i64,
     pub started_event_id: Option<i64>,
     pub closed_event_id: Option<i64>,
+}
+
+fn serde_opt_timedelta_ms<S: serde::Serializer>(
+    value: &Option<TimeDelta>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(td) => s.serialize_some(&td.num_milliseconds()),
+        None => s.serialize_none(),
+    }
 }
 
 /// Intermediate struct for correlating activity events during construction

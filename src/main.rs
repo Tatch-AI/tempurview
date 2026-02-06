@@ -1,14 +1,15 @@
-/// Version from git tag at build time, falls back to Cargo.toml version
-const VERSION: &str = env!("GIT_VERSION");
+use clap::Parser;
 
 use tempurview::action::Action;
 use tempurview::app::{App, Effect, InputMode, View};
+use tempurview::cli::Cli;
 use tempurview::cli_worker::{CliHandle, CliRequest, CliWorker};
 use tempurview::client::{GrpcTemporalClient, MockTemporalClient, TemporalClient};
+use tempurview::commands;
 use tempurview::config::Config;
-use tempurview::domain::WorkflowStatus;
 use tempurview::event::{event_to_action, EventHandler};
 use tempurview::logging;
+use tempurview::output::OutputFormat;
 use tempurview::tui::Tui;
 use tempurview::app::TimelineItemRef;
 use tempurview::widgets::{
@@ -39,7 +40,6 @@ async fn main() -> color_eyre::Result<()> {
     }
 
     // Initialize logging FIRST (before color_eyre which may set up its own subscriber)
-    // Keep the guard alive for the duration of the program to ensure logs are flushed
     let _log_guard = match logging::init() {
         Ok(guard) => Some(guard),
         Err(e) => {
@@ -50,40 +50,107 @@ async fn main() -> color_eyre::Result<()> {
 
     color_eyre::install()?;
 
-    // Parse configuration
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Parse CLI args via clap
+    let cli = Cli::parse();
 
-    // Check for version flag
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("tempurview {}", VERSION);
-        return Ok(());
-    }
-
-    // Check for help flag
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        print_help();
-        return Ok(());
-    }
-
-    // Check for logs flag
-    if args.iter().any(|a| a == "--logs") {
+    // Handle --logs flag (works regardless of subcommand)
+    if cli.global.logs {
         show_logs_info();
         return Ok(());
     }
 
-    // Check for test-connection flag
-    if args.iter().any(|a| a == "--test-connection") {
-        return test_connection().await;
-    }
+    // Build config from global args
+    let config = Config::from_global_args(&cli.global)?;
 
-    let config = Config::from_args(&args)?;
-    info!("Starting Tempurview");
+    match cli.command {
+        // No subcommand → launch TUI (backward compat)
+        None => run_tui(config).await,
+
+        Some(tempurview::cli::Commands::TestConnection) => {
+            commands::connection::handle(&config).await
+        }
+
+        Some(tempurview::cli::Commands::Config { action }) => {
+            let format = OutputFormat::resolve(cli.global.output);
+            commands::config_cmd::handle(action, &config, format);
+            Ok(())
+        }
+
+        Some(cmd) => {
+            // All other commands need a client
+            let client: Arc<dyn TemporalClient> = create_client(&config).await?;
+            let format = OutputFormat::resolve(cli.global.output);
+
+            match cmd {
+                tempurview::cli::Commands::Workflow { action } => {
+                    commands::workflow::handle(action, client.as_ref(), format, config.default_limit)
+                        .await
+                }
+                tempurview::cli::Commands::Activity { action } => {
+                    commands::activity::handle(action, client.as_ref(), format).await
+                }
+                tempurview::cli::Commands::Event { action } => {
+                    commands::event::handle(action, client.as_ref(), format).await
+                }
+                tempurview::cli::Commands::Insight { action } => {
+                    commands::insight::handle(
+                        action,
+                        client.as_ref(),
+                        format,
+                        config.default_limit,
+                        &config,
+                    )
+                    .await
+                }
+                // Already handled above
+                tempurview::cli::Commands::TestConnection
+                | tempurview::cli::Commands::Config { .. } => unreachable!(),
+            }
+        }
+    }
+}
+
+/// Create a Temporal client from config (shared between TUI and CLI paths).
+async fn create_client(config: &Config) -> color_eyre::Result<Arc<dyn TemporalClient>> {
+    if config.use_mock {
+        info!(
+            "Using mock client with {} workflows",
+            config.mock_workflow_count
+        );
+        Ok(Arc::new(MockTemporalClient::with_random_data(
+            config.mock_workflow_count,
+        )))
+    } else {
+        let client = GrpcTemporalClient::connect(
+            &config.temporal_address,
+            config.temporal_namespace.clone(),
+            config.temporal_api_key.clone(),
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to create gRPC Temporal client: {}", e);
+            color_eyre::eyre::eyre!(
+                "Connection failed: {e}\n\nMake sure the following environment variables are set:\n  \
+                 TEMPORAL_ADDRESS   - Temporal server address\n  \
+                 TEMPORAL_NAMESPACE - Temporal namespace\n  \
+                 TEMPORAL_API_KEY   - API key for authentication (required for Temporal Cloud)\n\n\
+                 Or use --mock to run with simulated data"
+            )
+        })?;
+        info!("Created gRPC Temporal client");
+        Ok(Arc::new(client))
+    }
+}
+
+/// Run the interactive TUI. This contains all the code that was previously in main().
+async fn run_tui(config: Config) -> color_eyre::Result<()> {
+    info!("Starting Tempurview TUI");
     debug!(
         "Config: use_mock={}, limit={}",
         config.use_mock, config.default_limit
     );
 
-    // Create client (gRPC for real connections, mock for testing)
+    // Create client
     let client: Arc<dyn TemporalClient> = if config.use_mock {
         info!(
             "Using mock client with {} workflows",
@@ -94,7 +161,13 @@ async fn main() -> color_eyre::Result<()> {
         ))
     } else {
         println!("Connecting to Temporal via gRPC...");
-        match GrpcTemporalClient::from_env().await {
+        match GrpcTemporalClient::connect(
+            &config.temporal_address,
+            config.temporal_namespace.clone(),
+            config.temporal_api_key.clone(),
+        )
+        .await
+        {
             Ok(c) => {
                 info!("Created gRPC Temporal client");
                 Arc::new(c)
@@ -126,7 +199,7 @@ async fn main() -> color_eyre::Result<()> {
                 eprintln!("  1. Verify your TEMPORAL_ADDRESS is correct");
                 eprintln!("  2. Verify your TEMPORAL_NAMESPACE matches your Temporal namespace");
                 eprintln!("  3. For Temporal Cloud, ensure TEMPORAL_API_KEY is valid");
-                eprintln!("  4. Try running: tempurview --test-connection");
+                eprintln!("  4. Try running: tempurview test-connection");
                 return Ok(());
             }
         }
@@ -148,7 +221,12 @@ async fn main() -> color_eyre::Result<()> {
 
     // Create CLI worker for serialized request execution
     let (request_tx, request_rx) = mpsc::unbounded_channel::<CliRequest>();
-    let cli_worker = CliWorker::new(client.clone(), request_rx, action_tx.clone(), config.insights.clone());
+    let cli_worker = CliWorker::new(
+        client.clone(),
+        request_rx,
+        action_tx.clone(),
+        config.insights.clone(),
+    );
     let _worker_handle = cli_worker.spawn();
     let cli_handle = CliHandle::new(request_tx);
 
@@ -187,40 +265,6 @@ async fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
-fn print_help() {
-    println!("Tempurview {} - A terminal interface for Temporal workflows", VERSION);
-    println!();
-    println!("USAGE:");
-    println!("    tempurview [OPTIONS]");
-    println!();
-    println!("OPTIONS:");
-    println!("    --mock              Use mock data instead of connecting to Temporal");
-    println!("    --mock-count N      Number of mock workflows to generate (default: 100)");
-    println!("    --address ADDR      Temporal server address (overrides TEMPORAL_ADDRESS)");
-    println!("    --namespace NS      Temporal namespace (overrides TEMPORAL_NAMESPACE)");
-    println!("    --limit N           Maximum workflows to fetch (default: 50)");
-    println!("    --test-connection   Test connection to Temporal and exit");
-    println!("    --logs              Show log file location and recent errors");
-    println!("    -h, --help          Show this help message");
-    println!("    -V, --version       Show version information");
-    println!();
-    println!("ENVIRONMENT VARIABLES:");
-    println!("    TEMPORAL_ADDRESS    Temporal server address (e.g., localhost:7233)");
-    println!("    TEMPORAL_NAMESPACE  Temporal namespace");
-    println!("    TEMPORAL_API_KEY    (optional) API key for authentication");
-    println!();
-    println!("KEYBOARD SHORTCUTS:");
-    println!("    j/k or arrows   Navigate up/down");
-    println!("    Enter           Select/view details");
-    println!("    Esc             Go back");
-    println!("    1-5             Filter by status");
-    println!("    0               Clear filters");
-    println!("    /               Open filter input");
-    println!("    r               Refresh data");
-    println!("    ?               Toggle help");
-    println!("    q               Quit");
-}
-
 fn show_logs_info() {
     println!("Tempurview Logs");
     println!("===============\n");
@@ -230,7 +274,6 @@ fn show_logs_info() {
             println!("Log directory: {}", dir.display());
             println!();
 
-            // List log files
             if dir.exists() {
                 println!("Log files:");
                 match std::fs::read_dir(&dir) {
@@ -267,7 +310,6 @@ fn show_logs_info() {
                     Err(e) => println!("  Error reading directory: {}", e),
                 }
 
-                // Show recent errors from the most recent log file
                 println!();
                 println!("Recent errors (last 10):");
                 let log_files: Vec<_> = std::fs::read_dir(&dir)
@@ -324,75 +366,6 @@ fn show_logs_info() {
             println!("Could not determine log directory (HOME not set?)");
         }
     }
-}
-
-async fn test_connection() -> color_eyre::Result<()> {
-    info!("Running connection test");
-    println!("Testing Temporal connection...\n");
-
-    // Check environment variables
-    let address = std::env::var("TEMPORAL_ADDRESS");
-    let namespace = std::env::var("TEMPORAL_NAMESPACE");
-    let api_key = std::env::var("TEMPORAL_API_KEY");
-
-    println!("Environment variables:");
-    match &address {
-        Ok(addr) => println!("  TEMPORAL_ADDRESS:   {}", addr),
-        Err(_) => println!("  TEMPORAL_ADDRESS:   ✗ NOT SET"),
-    }
-    match &namespace {
-        Ok(ns) => println!("  TEMPORAL_NAMESPACE: {}", ns),
-        Err(_) => println!("  TEMPORAL_NAMESPACE: ✗ NOT SET"),
-    }
-    match &api_key {
-        Ok(_) => println!("  TEMPORAL_API_KEY:   ✓ (set, hidden)"),
-        Err(_) => println!("  TEMPORAL_API_KEY:   (not set - may be required for Temporal Cloud)"),
-    }
-    println!();
-
-    // Try to create gRPC client
-    println!("Attempting to connect via gRPC...");
-    let client = match GrpcTemporalClient::from_env().await {
-        Ok(c) => c,
-        Err(e) => {
-            println!("✗ Failed to connect: {}", e);
-            println!("\nMake sure TEMPORAL_ADDRESS and TEMPORAL_NAMESPACE are set.");
-            println!("For Temporal Cloud, you also need TEMPORAL_API_KEY.");
-            std::process::exit(1);
-        }
-    };
-
-    // Try to count workflows
-    match client.count(None).await {
-        Ok(count) => {
-            println!("\n✓ Connection successful!");
-            println!("  Total workflows: {}", count);
-
-            // Try to get counts by status
-            println!("\nWorkflow counts by status:");
-            for status in WorkflowStatus::all() {
-                let query = format!("ExecutionStatus='{}'", status.as_query_value());
-                match client.count(Some(&query)).await {
-                    Ok(n) if n > 0 => println!("  {:15} {}", format!("{:?}:", status), n),
-                    Ok(_) => {}
-                    Err(_) => println!("  {:15} (query failed)", format!("{:?}:", status)),
-                }
-            }
-            println!("\n✓ All tests passed! Your gRPC connection is working.");
-        }
-        Err(e) => {
-            println!("\n✗ Connection failed: {}", e);
-            println!("\nTroubleshooting tips:");
-            println!("  1. Verify your TEMPORAL_ADDRESS is correct");
-            println!("     - For Temporal Cloud: <region>.<cloud>.api.temporal.io:7233");
-            println!("     - For self-hosted: localhost:7233 (or your server address)");
-            println!("  2. Verify your TEMPORAL_NAMESPACE matches your Temporal namespace");
-            println!("  3. For Temporal Cloud, ensure TEMPORAL_API_KEY is valid");
-            std::process::exit(1);
-        }
-    }
-
-    Ok(())
 }
 
 fn render(app: &App, frame: &mut Frame) {
@@ -606,7 +579,6 @@ fn render_error(error: &str, frame: &mut Frame, area: Rect) {
 }
 
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
-    // Center the help overlay
     let help_width = 50.min(area.width.saturating_sub(4));
     let help_height = 30.min(area.height.saturating_sub(4));
 
