@@ -1,6 +1,7 @@
 [package]
 name = "tempurview"
-version = "0.1.0"
+# Version is set from git tags at publish time (see .github/workflows/release.yml)
+version = "0.0.0-dev"
 edition = "2021"
 rust-version = "1.70"
 description = "A CLI and TUI for viewing and managing Temporal workflows"
