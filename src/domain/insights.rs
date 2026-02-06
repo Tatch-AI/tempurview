@@ -45,6 +45,8 @@ pub enum InsightCategory {
     TypeAnomaly,
     LongRunningActivity,
     ErrorInOutput,
+    ChildWorkflowFailure,
+    ChildWorkflowLatency,
 }
 
 impl InsightCategory {
@@ -59,6 +61,8 @@ impl InsightCategory {
             Self::TypeAnomaly => "Type Anomaly",
             Self::LongRunningActivity => "Long Activity",
             Self::ErrorInOutput => "Error in I/O",
+            Self::ChildWorkflowFailure => "Child WF Failure",
+            Self::ChildWorkflowLatency => "Child WF Latency",
         }
     }
 }
@@ -131,6 +135,14 @@ impl InsightThresholds {
     pub const ERROR_IN_OUTPUT_WARNING: usize = 2;
     pub const ERROR_IN_OUTPUT_CRITICAL: usize = 5;
 
+    // Child workflow failure thresholds (grouped by child type)
+    pub const CHILD_WF_FAILURE_WARNING: usize = 2;
+    pub const CHILD_WF_FAILURE_CRITICAL: usize = 5;
+
+    // Child workflow start latency thresholds (milliseconds)
+    pub const CHILD_WF_LATENCY_WARNING_MS: i64 = 2000;
+    pub const CHILD_WF_LATENCY_CRITICAL_MS: i64 = 10000;
+
     // Sampling
     pub const MAX_HISTORY_SAMPLES: usize = 30;
 
@@ -175,5 +187,7 @@ mod tests {
         assert_eq!(InsightCategory::ActivityRetry.label(), "Activity Retry");
         assert_eq!(InsightCategory::StuckWorkflow.label(), "Stuck Workflow");
         assert_eq!(InsightCategory::ErrorInOutput.label(), "Error in I/O");
+        assert_eq!(InsightCategory::ChildWorkflowFailure.label(), "Child WF Failure");
+        assert_eq!(InsightCategory::ChildWorkflowLatency.label(), "Child WF Latency");
     }
 }

@@ -623,8 +623,95 @@ fn extract_event_details(
                 "scheduled_event_id": attrs.scheduled_event_id,
             })
         }
+        // Child workflow events
+        Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(attrs)) => {
+            serde_json::json!({
+                "workflow_id": attrs.workflow_id,
+                "workflow_type": attrs.workflow_type.as_ref().map(|t| &t.name),
+                "task_queue": attrs.task_queue.as_ref().map(|q| &q.name),
+                "namespace": attrs.namespace,
+                "parent_close_policy": attrs.parent_close_policy,
+                "input": attrs.input.as_ref().map(|p| payloads_to_json(p)),
+            })
+        }
+        Some(Attributes::StartChildWorkflowExecutionFailedEventAttributes(attrs)) => {
+            serde_json::json!({
+                "workflow_id": attrs.workflow_id,
+                "workflow_type": attrs.workflow_type.as_ref().map(|t| &t.name),
+                "cause": attrs.cause,
+                "initiated_event_id": attrs.initiated_event_id,
+            })
+        }
+        Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs)) => {
+            serde_json::json!({
+                "initiated_event_id": attrs.initiated_event_id,
+                "workflow_id": attrs.workflow_execution.as_ref().map(|e| &e.workflow_id),
+                "run_id": attrs.workflow_execution.as_ref().map(|e| &e.run_id),
+                "workflow_type": attrs.workflow_type.as_ref().map(|t| &t.name),
+            })
+        }
+        Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(attrs)) => {
+            serde_json::json!({
+                "initiated_event_id": attrs.initiated_event_id,
+                "started_event_id": attrs.started_event_id,
+                "workflow_id": attrs.workflow_execution.as_ref().map(|e| &e.workflow_id),
+                "run_id": attrs.workflow_execution.as_ref().map(|e| &e.run_id),
+                "result": attrs.result.as_ref().map(|p| payloads_to_json(p)),
+            })
+        }
+        Some(Attributes::ChildWorkflowExecutionFailedEventAttributes(attrs)) => {
+            let mut json = serde_json::json!({
+                "initiated_event_id": attrs.initiated_event_id,
+                "started_event_id": attrs.started_event_id,
+                "workflow_id": attrs.workflow_execution.as_ref().map(|e| &e.workflow_id),
+                "run_id": attrs.workflow_execution.as_ref().map(|e| &e.run_id),
+                "retry_state": attrs.retry_state,
+            });
+            if let Some(ref f) = attrs.failure {
+                json["failure"] = serde_json::json!({
+                    "message": f.message,
+                    "failure_type": f.failure_info.as_ref().map(|info| match info {
+                        proto::temporal::api::failure::v1::failure::FailureInfo::ApplicationFailureInfo(_) => "ApplicationFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::TimeoutFailureInfo(_) => "TimeoutFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::CanceledFailureInfo(_) => "CanceledFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::TerminatedFailureInfo(_) => "TerminatedFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::ServerFailureInfo(_) => "ServerFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::ActivityFailureInfo(_) => "ActivityFailure",
+                        proto::temporal::api::failure::v1::failure::FailureInfo::ChildWorkflowExecutionFailureInfo(_) => "ChildWorkflowExecutionFailure",
+                        _ => "Unknown",
+                    }).unwrap_or("Unknown"),
+                    "stack_trace": if f.stack_trace.is_empty() { None } else { Some(&f.stack_trace) },
+                });
+            }
+            json
+        }
+        Some(Attributes::ChildWorkflowExecutionCanceledEventAttributes(attrs)) => {
+            serde_json::json!({
+                "initiated_event_id": attrs.initiated_event_id,
+                "started_event_id": attrs.started_event_id,
+                "workflow_id": attrs.workflow_execution.as_ref().map(|e| &e.workflow_id),
+                "run_id": attrs.workflow_execution.as_ref().map(|e| &e.run_id),
+            })
+        }
+        Some(Attributes::ChildWorkflowExecutionTimedOutEventAttributes(attrs)) => {
+            serde_json::json!({
+                "initiated_event_id": attrs.initiated_event_id,
+                "started_event_id": attrs.started_event_id,
+                "workflow_id": attrs.workflow_execution.as_ref().map(|e| &e.workflow_id),
+                "run_id": attrs.workflow_execution.as_ref().map(|e| &e.run_id),
+                "retry_state": attrs.retry_state,
+            })
+        }
+        Some(Attributes::ChildWorkflowExecutionTerminatedEventAttributes(attrs)) => {
+            serde_json::json!({
+                "initiated_event_id": attrs.initiated_event_id,
+                "started_event_id": attrs.started_event_id,
+                "workflow_id": attrs.workflow_execution.as_ref().map(|e| &e.workflow_id),
+                "run_id": attrs.workflow_execution.as_ref().map(|e| &e.run_id),
+            })
+        }
         _ => {
-            // For non-activity events, include the event type name as a minimal detail
+            // For unhandled events, include the event type name as a minimal detail
             serde_json::json!({
                 "event_type": event_type_name(event.event_type),
             })

@@ -6,7 +6,8 @@
 use crate::action::{Action, DataPayload};
 use crate::client::TemporalClient;
 use crate::domain::{
-    correlate_activities, compute_activity_findings, compute_list_findings, rank_findings,
+    compute_activity_findings, compute_child_workflow_findings, compute_list_findings,
+    correlate_activities, correlate_child_workflows, rank_findings,
     select_workflows_for_sampling, InsightThresholds, InsightsResult, StatusCounts, TypeStat,
     WorkflowFilter, WorkflowStatus,
 };
@@ -285,13 +286,20 @@ impl CliWorker {
             InsightThresholds::MAX_HISTORY_SAMPLES,
         );
 
-        // Step 4: Fetch histories and correlate activities
+        // Step 4: Fetch histories and correlate activities + child workflows
         let mut activity_samples: Vec<(String, Vec<crate::domain::ActivityExecution>)> = Vec::new();
+        let mut child_wf_samples: Vec<(String, Vec<crate::domain::ChildWorkflowExecution>)> =
+            Vec::new();
         for wf in &samples_to_fetch {
             match self.client.get_history(&wf.workflow_id, Some(&wf.run_id)).await {
                 Ok(events) => {
                     let activities = correlate_activities(&events);
                     activity_samples.push((wf.workflow_id.clone(), activities));
+
+                    let child_workflows = correlate_child_workflows(&events);
+                    if !child_workflows.is_empty() {
+                        child_wf_samples.push((wf.workflow_id.clone(), child_workflows));
+                    }
                 }
                 Err(e) => {
                     debug!(
@@ -304,13 +312,18 @@ impl CliWorker {
         }
         let histories_fetched = activity_samples.len();
         info!(
-            "CliWorker: Insights - fetched {} histories",
-            histories_fetched
+            "CliWorker: Insights - fetched {} histories ({} with child workflows)",
+            histories_fetched,
+            child_wf_samples.len()
         );
 
         // Step 5: Compute activity-level findings
         let activity_findings = compute_activity_findings(&activity_samples);
         all_findings.extend(activity_findings);
+
+        // Step 5b: Compute child workflow findings
+        let child_wf_findings = compute_child_workflow_findings(&child_wf_samples);
+        all_findings.extend(child_wf_findings);
 
         // Step 6: Rank all findings
         let findings = rank_findings(all_findings);

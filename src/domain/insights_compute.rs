@@ -1,6 +1,7 @@
 use crate::domain::{
-    ActivityExecution, ActivityStatus, InsightCategory, InsightFinding, InsightSeverity,
-    InsightThresholds, WorkflowStatus, WorkflowSummary,
+    ActivityExecution, ActivityStatus, ChildWorkflowExecution, ChildWorkflowStatus,
+    InsightCategory, InsightFinding, InsightSeverity, InsightThresholds, WorkflowStatus,
+    WorkflowSummary,
 };
 use chrono::Utc;
 use std::collections::HashMap;
@@ -547,6 +548,130 @@ pub fn compute_activity_findings(
     findings
 }
 
+/// Compute findings from sampled child workflow data (requires history).
+/// Implements: Child Workflow Failure Hotspot, Child Workflow Start Latency.
+pub fn compute_child_workflow_findings(
+    samples: &[(String, Vec<ChildWorkflowExecution>)],
+) -> Vec<InsightFinding> {
+    let mut findings = Vec::new();
+    let now = Utc::now();
+
+    // Track (child_workflow_type -> list of (parent_workflow_id, child_wf))
+    let mut by_child_type: HashMap<&str, Vec<(&str, &ChildWorkflowExecution)>> = HashMap::new();
+
+    for (wf_id, child_workflows) in samples {
+        for cw in child_workflows {
+            by_child_type
+                .entry(cw.workflow_type.as_str())
+                .or_default()
+                .push((wf_id.as_str(), cw));
+        }
+    }
+
+    let failed_statuses = [
+        ChildWorkflowStatus::Failed,
+        ChildWorkflowStatus::TimedOut,
+        ChildWorkflowStatus::Canceled,
+        ChildWorkflowStatus::Terminated,
+        ChildWorkflowStatus::StartFailed,
+    ];
+
+    for (child_type, instances) in &by_child_type {
+        // Finding: Child Workflow Failure Hotspot
+        let failures: Vec<(&str, &ChildWorkflowExecution)> = instances
+            .iter()
+            .filter(|(_, cw)| failed_statuses.contains(&cw.status))
+            .copied()
+            .collect();
+
+        let failure_count = failures.len();
+        if failure_count > 0 {
+            let severity = if failure_count >= InsightThresholds::CHILD_WF_FAILURE_CRITICAL {
+                Some(InsightSeverity::Critical)
+            } else if failure_count >= InsightThresholds::CHILD_WF_FAILURE_WARNING {
+                Some(InsightSeverity::Warning)
+            } else {
+                None
+            };
+
+            if let Some(severity) = severity {
+                let affected_wfs: Vec<String> = failures
+                    .iter()
+                    .map(|(wf_id, _)| wf_id.to_string())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let wf_count = affected_wfs.len();
+
+                findings.push(InsightFinding {
+                    severity,
+                    category: InsightCategory::ChildWorkflowFailure,
+                    title: format!(
+                        "{}: {} failures across {} parent workflows",
+                        child_type, failure_count, wf_count
+                    ),
+                    detail: format!(
+                        "{} child workflow failures detected for type {}.",
+                        failure_count, child_type
+                    ),
+                    affected_entities: affected_wfs,
+                    computed_at: now,
+                });
+            }
+        }
+
+        // Finding: Child Workflow Start Latency
+        let mut latencies_ms: Vec<(&str, i64)> = Vec::new();
+        for (wf_id, cw) in instances {
+            if let Some(ref sl) = cw.start_latency {
+                latencies_ms.push((wf_id, sl.num_milliseconds()));
+            }
+        }
+
+        if !latencies_ms.is_empty() {
+            let mut sorted: Vec<i64> = latencies_ms.iter().map(|(_, ms)| *ms).collect();
+            sorted.sort();
+            let median = sorted[sorted.len() / 2];
+
+            let severity = if median >= InsightThresholds::CHILD_WF_LATENCY_CRITICAL_MS {
+                Some(InsightSeverity::Critical)
+            } else if median >= InsightThresholds::CHILD_WF_LATENCY_WARNING_MS {
+                Some(InsightSeverity::Warning)
+            } else {
+                None
+            };
+
+            if let Some(severity) = severity {
+                let median_secs = median as f64 / 1000.0;
+                let affected_wfs: Vec<String> = latencies_ms
+                    .iter()
+                    .filter(|(_, ms)| *ms >= InsightThresholds::CHILD_WF_LATENCY_WARNING_MS)
+                    .map(|(wf_id, _)| wf_id.to_string())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+
+                findings.push(InsightFinding {
+                    severity,
+                    category: InsightCategory::ChildWorkflowLatency,
+                    title: format!(
+                        "{}: {:.1}s median start latency",
+                        child_type, median_secs
+                    ),
+                    detail: format!(
+                        "Measured across {} child workflow executions. High start latency may indicate task queue congestion.",
+                        sorted.len()
+                    ),
+                    affected_entities: affected_wfs,
+                    computed_at: now,
+                });
+            }
+        }
+    }
+
+    findings
+}
+
 /// Extract a short snippet around a pattern match in a string
 fn extract_snippet(text: &str, pattern: &str) -> String {
     let lower = text.to_lowercase();
@@ -640,7 +765,7 @@ pub fn rank_findings(mut findings: Vec<InsightFinding>) -> Vec<InsightFinding> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ActivityStatus, FailureInfo};
+    use crate::domain::{ActivityStatus, ChildWorkflowExecution, ChildWorkflowStatus, FailureInfo};
     use chrono::{Duration, TimeDelta};
 
     fn make_wf(id: &str, wf_type: &str, status: WorkflowStatus, hours_ago: i64) -> WorkflowSummary {
@@ -1235,5 +1360,184 @@ mod tests {
         let ranked = rank_findings(findings);
         assert_eq!(ranked[0].title, "more");
         assert_eq!(ranked[1].title, "fewer");
+    }
+
+    // --- compute_child_workflow_findings tests ---
+
+    fn make_child_wf(
+        workflow_type: &str,
+        status: ChildWorkflowStatus,
+        start_latency_ms: Option<i64>,
+    ) -> ChildWorkflowExecution {
+        let now = Utc::now();
+        let initiated_time = now - Duration::minutes(10);
+        let started_time = start_latency_ms.map(|ms| initiated_time + Duration::milliseconds(ms));
+        let closed_time = if matches!(
+            status,
+            ChildWorkflowStatus::Completed
+                | ChildWorkflowStatus::Failed
+                | ChildWorkflowStatus::TimedOut
+                | ChildWorkflowStatus::Canceled
+                | ChildWorkflowStatus::Terminated
+                | ChildWorkflowStatus::StartFailed
+        ) {
+            Some(now - Duration::minutes(1))
+        } else {
+            None
+        };
+
+        ChildWorkflowExecution {
+            workflow_id: format!("child-{}", workflow_type),
+            workflow_type: workflow_type.to_string(),
+            status,
+            namespace: Some("default".to_string()),
+            run_id: Some("run-123".to_string()),
+            initiated_time,
+            started_time,
+            closed_time,
+            start_latency: start_latency_ms.map(TimeDelta::milliseconds),
+            execution_time: Some(TimeDelta::seconds(5)),
+            total_time: Some(TimeDelta::seconds(10)),
+            failure: if matches!(
+                status,
+                ChildWorkflowStatus::Failed | ChildWorkflowStatus::StartFailed
+            ) {
+                Some(FailureInfo {
+                    message: format!("{} child workflow failed", workflow_type),
+                    failure_type: "ApplicationFailure".to_string(),
+                    stack_trace: None,
+                    cause: None,
+                })
+            } else {
+                None
+            },
+            initiated_event_id: 10,
+            started_event_id: started_time.map(|_| 11),
+            closed_event_id: closed_time.map(|_| 15),
+        }
+    }
+
+    #[test]
+    fn test_child_wf_findings_empty() {
+        let findings = compute_child_workflow_findings(&[]);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_child_wf_failure_hotspot_warning() {
+        let samples = vec![
+            (
+                "parent-1".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Failed, Some(50))],
+            ),
+            (
+                "parent-2".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Failed, Some(50))],
+            ),
+        ];
+
+        let findings = compute_child_workflow_findings(&samples);
+        let failure_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ChildWorkflowFailure)
+            .collect();
+
+        assert_eq!(failure_findings.len(), 1);
+        assert_eq!(failure_findings[0].severity, InsightSeverity::Warning);
+        assert!(failure_findings[0].title.contains("ProcessOrder"));
+        assert!(failure_findings[0].title.contains("2 failures"));
+    }
+
+    #[test]
+    fn test_child_wf_failure_hotspot_critical() {
+        let samples: Vec<(String, Vec<ChildWorkflowExecution>)> = (0..5)
+            .map(|i| {
+                (
+                    format!("parent-{}", i),
+                    vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Failed, Some(50))],
+                )
+            })
+            .collect();
+
+        let findings = compute_child_workflow_findings(&samples);
+        let failure_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ChildWorkflowFailure)
+            .collect();
+
+        assert_eq!(failure_findings.len(), 1);
+        assert_eq!(failure_findings[0].severity, InsightSeverity::Critical);
+    }
+
+    #[test]
+    fn test_child_wf_latency_warning() {
+        let samples = vec![
+            (
+                "parent-1".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Completed, Some(2500))],
+            ),
+            (
+                "parent-2".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Completed, Some(3000))],
+            ),
+            (
+                "parent-3".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Completed, Some(2800))],
+            ),
+        ];
+
+        let findings = compute_child_workflow_findings(&samples);
+        let latency_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ChildWorkflowLatency)
+            .collect();
+
+        assert_eq!(latency_findings.len(), 1);
+        assert_eq!(latency_findings[0].severity, InsightSeverity::Warning);
+        assert!(latency_findings[0].title.contains("ProcessOrder"));
+    }
+
+    #[test]
+    fn test_child_wf_latency_critical() {
+        let samples = vec![
+            (
+                "parent-1".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Completed, Some(11000))],
+            ),
+            (
+                "parent-2".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Completed, Some(12000))],
+            ),
+            (
+                "parent-3".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Completed, Some(15000))],
+            ),
+        ];
+
+        let findings = compute_child_workflow_findings(&samples);
+        let latency_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ChildWorkflowLatency)
+            .collect();
+
+        assert_eq!(latency_findings.len(), 1);
+        assert_eq!(latency_findings[0].severity, InsightSeverity::Critical);
+    }
+
+    #[test]
+    fn test_child_wf_no_findings_all_healthy() {
+        let samples = vec![
+            (
+                "parent-1".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Completed, Some(100))],
+            ),
+            (
+                "parent-2".to_string(),
+                vec![make_child_wf("ProcessOrder", ChildWorkflowStatus::Completed, Some(200))],
+            ),
+        ];
+
+        let findings = compute_child_workflow_findings(&samples);
+        assert!(findings.is_empty());
     }
 }
