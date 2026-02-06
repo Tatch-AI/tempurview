@@ -38,11 +38,13 @@ impl std::fmt::Display for InsightSeverity {
 pub enum InsightCategory {
     FailureRate,
     RetryStorm,
+    ActivityRetry,
     QueueLatency,
     StuckWorkflow,
     ActivityFailure,
     TypeAnomaly,
     LongRunningActivity,
+    ErrorInOutput,
 }
 
 impl InsightCategory {
@@ -50,11 +52,13 @@ impl InsightCategory {
         match self {
             Self::FailureRate => "Failure Rate",
             Self::RetryStorm => "Retry Storm",
+            Self::ActivityRetry => "Activity Retry",
             Self::QueueLatency => "Queue Latency",
             Self::StuckWorkflow => "Stuck Workflow",
             Self::ActivityFailure => "Activity Failure",
             Self::TypeAnomaly => "Type Anomaly",
             Self::LongRunningActivity => "Long Activity",
+            Self::ErrorInOutput => "Error in I/O",
         }
     }
 }
@@ -120,8 +124,31 @@ impl InsightThresholds {
     pub const LONG_ACTIVITY_WARNING_MINS: i64 = 30;
     pub const LONG_ACTIVITY_CRITICAL_MINS: i64 = 120;
 
+    // Activity retry: any activity with attempt >= this is flagged
+    pub const ACTIVITY_RETRY_MIN_ATTEMPT: i32 = 2;
+
+    // Error-in-output: minimum matches to trigger
+    pub const ERROR_IN_OUTPUT_WARNING: usize = 2;
+    pub const ERROR_IN_OUTPUT_CRITICAL: usize = 5;
+
     // Sampling
-    pub const MAX_HISTORY_SAMPLES: usize = 20;
+    pub const MAX_HISTORY_SAMPLES: usize = 30;
+
+    // Error patterns to scan for in activity I/O (case-insensitive)
+    pub const ERROR_PATTERNS: &'static [&'static str] = &[
+        "error",
+        "exception",
+        "failed",
+        "failure",
+        "timed out",
+        "timeout",
+        "panic",
+        "fatal",
+        "unhandled",
+        "traceback",
+        "stack trace",
+        "errno",
+    ];
 }
 
 #[cfg(test)]
@@ -145,6 +172,8 @@ mod tests {
     fn test_category_labels() {
         assert_eq!(InsightCategory::FailureRate.label(), "Failure Rate");
         assert_eq!(InsightCategory::RetryStorm.label(), "Retry Storm");
+        assert_eq!(InsightCategory::ActivityRetry.label(), "Activity Retry");
         assert_eq!(InsightCategory::StuckWorkflow.label(), "Stuck Workflow");
+        assert_eq!(InsightCategory::ErrorInOutput.label(), "Error in I/O");
     }
 }

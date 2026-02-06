@@ -399,7 +399,34 @@ impl TemporalClient for MockTemporalClient {
 
             match outcome {
                 2 => {
-                    // Completed
+                    // Completed — some activities embed error signals in their output
+                    // (simulating swallowed failures that are common in real workflows)
+                    let result_json = if activity_type == "ProcessPayment" && rng.gen_bool(0.4) {
+                        serde_json::json!({
+                            "success": false,
+                            "error": format!("Payment gateway error: connection timeout after 30s"),
+                            "retryable": true,
+                            "data": format!("result-{}", activity_type),
+                        })
+                    } else if activity_type == "SendEmail" && rng.gen_bool(0.3) {
+                        serde_json::json!({
+                            "sent": false,
+                            "exception": "SmtpException: relay access denied",
+                            "fallback": "queued for retry",
+                            "data": format!("result-{}", activity_type),
+                        })
+                    } else if activity_type == "ValidateInput" && rng.gen_bool(0.25) {
+                        serde_json::json!({
+                            "valid": false,
+                            "errors": ["field 'email' failed validation", "timeout checking external service"],
+                            "data": format!("result-{}", activity_type),
+                        })
+                    } else {
+                        serde_json::json!({
+                            "success": true,
+                            "data": format!("result-{}", activity_type),
+                        })
+                    };
                     events.push(HistoryEvent {
                         event_id,
                         event_type: "ActivityTaskCompleted".to_string(),
@@ -407,7 +434,7 @@ impl TemporalClient for MockTemporalClient {
                         details: serde_json::json!({
                             "scheduled_event_id": scheduled_event_id,
                             "started_event_id": started_event_id,
-                            "result": {"success": true, "data": format!("result-{}", activity_type)},
+                            "result": result_json,
                             "identity": "mock-worker@host",
                         }),
                     });

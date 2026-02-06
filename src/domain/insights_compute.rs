@@ -313,6 +313,179 @@ pub fn compute_activity_findings(
         }
     }
 
+    // Finding #8: Activity Retry (individual activities with attempt >= 2)
+    // Groups by activity type, lists each retried instance
+    let mut retried_by_type: HashMap<&str, Vec<(&str, i32)>> = HashMap::new(); // activity_type -> [(wf_id, attempt)]
+    for (wf_id, activities) in samples {
+        for activity in activities {
+            if activity.attempt >= InsightThresholds::ACTIVITY_RETRY_MIN_ATTEMPT {
+                retried_by_type
+                    .entry(activity.activity_type.as_str())
+                    .or_default()
+                    .push((wf_id.as_str(), activity.attempt));
+            }
+        }
+    }
+
+    for (activity_type, retries) in &retried_by_type {
+        let count = retries.len();
+        let max_attempt = retries.iter().map(|(_, a)| *a).max().unwrap_or(0);
+        let affected_wfs: Vec<String> = retries
+            .iter()
+            .map(|(wf_id, _)| wf_id.to_string())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let wf_count = affected_wfs.len();
+
+        // Info for any retries, Warning for 3+, Critical for 5+
+        let severity = if count >= 5 {
+            InsightSeverity::Critical
+        } else if count >= 3 {
+            InsightSeverity::Warning
+        } else {
+            InsightSeverity::Info
+        };
+
+        findings.push(InsightFinding {
+            severity,
+            category: InsightCategory::ActivityRetry,
+            title: format!(
+                "{}: {} retried (max {} attempts, {} workflows)",
+                activity_type, count, max_attempt, wf_count
+            ),
+            detail: format!(
+                "Activities with attempt >= {} detected. Retries indicate transient failures, timeouts, or resource contention.",
+                InsightThresholds::ACTIVITY_RETRY_MIN_ATTEMPT,
+            ),
+            affected_entities: affected_wfs,
+            computed_at: now,
+        });
+    }
+
+    // Finding #9: Error in I/O — scan activity input/output/failure for error patterns
+    // This catches "swallowed" failures where workflows succeed but activity I/O contains error signals
+    {
+        let patterns = InsightThresholds::ERROR_PATTERNS;
+        // (activity_type, wf_id, matched_pattern, snippet)
+        let mut matches: Vec<(&str, &str, &str, String)> = Vec::new();
+
+        for (wf_id, activities) in samples {
+            for activity in activities {
+                // Scan output
+                if let Some(ref output) = activity.output {
+                    let output_str = output.to_string().to_lowercase();
+                    for &pattern in patterns {
+                        if output_str.contains(pattern) {
+                            let snippet = extract_snippet(&output.to_string(), pattern);
+                            matches.push((
+                                activity.activity_type.as_str(),
+                                wf_id.as_str(),
+                                pattern,
+                                format!("output: {}", snippet),
+                            ));
+                            break; // one match per activity output is enough
+                        }
+                    }
+                }
+                // Scan input
+                if let Some(ref input) = activity.input {
+                    let input_str = input.to_string().to_lowercase();
+                    for &pattern in patterns {
+                        if input_str.contains(pattern) {
+                            let snippet = extract_snippet(&input.to_string(), pattern);
+                            matches.push((
+                                activity.activity_type.as_str(),
+                                wf_id.as_str(),
+                                pattern,
+                                format!("input: {}", snippet),
+                            ));
+                            break;
+                        }
+                    }
+                }
+                // Scan failure message (even on "completed" activities that had prior failures)
+                if let Some(ref failure) = activity.failure {
+                    let msg_lower = failure.message.to_lowercase();
+                    for &pattern in patterns {
+                        if msg_lower.contains(pattern) {
+                            matches.push((
+                                activity.activity_type.as_str(),
+                                wf_id.as_str(),
+                                pattern,
+                                format!("failure: {}", truncate(&failure.message, 80)),
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if !matches.is_empty() {
+            // Group by activity type
+            let mut by_type: HashMap<&str, Vec<(&str, &str, String)>> = HashMap::new();
+            for (at, wf_id, pattern, snippet) in &matches {
+                by_type
+                    .entry(at)
+                    .or_default()
+                    .push((wf_id, pattern, snippet.clone()));
+            }
+
+            for (activity_type, type_matches) in &by_type {
+                let count = type_matches.len();
+                let severity = if count >= InsightThresholds::ERROR_IN_OUTPUT_CRITICAL {
+                    InsightSeverity::Critical
+                } else if count >= InsightThresholds::ERROR_IN_OUTPUT_WARNING {
+                    InsightSeverity::Warning
+                } else {
+                    InsightSeverity::Info
+                };
+
+                // Count pattern frequency
+                let mut pattern_counts: HashMap<&str, usize> = HashMap::new();
+                for (_, pattern, _) in type_matches {
+                    *pattern_counts.entry(pattern).or_default() += 1;
+                }
+                let top_pattern = pattern_counts
+                    .iter()
+                    .max_by_key(|(_, &c)| c)
+                    .map(|(&p, _)| p)
+                    .unwrap_or("error");
+
+                let affected_wfs: Vec<String> = type_matches
+                    .iter()
+                    .map(|(wf_id, _, _)| wf_id.to_string())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let wf_count = affected_wfs.len();
+
+                // Show a few example snippets in the detail
+                let examples: Vec<String> = type_matches
+                    .iter()
+                    .take(3)
+                    .map(|(_, _, snippet)| snippet.clone())
+                    .collect();
+
+                findings.push(InsightFinding {
+                    severity,
+                    category: InsightCategory::ErrorInOutput,
+                    title: format!(
+                        "{}: \"{}\" found in {} I/O ({} workflows)",
+                        activity_type, top_pattern, count, wf_count,
+                    ),
+                    detail: format!(
+                        "Error patterns detected in activity I/O despite workflow success. Examples: {}",
+                        examples.join("; "),
+                    ),
+                    affected_entities: affected_wfs,
+                    computed_at: now,
+                });
+            }
+        }
+    }
+
     // Finding #7: Long-Running Activity
     let mut long_running: Vec<(&str, &str, i64)> = Vec::new(); // (wf_id, activity_type, elapsed_mins)
     for (wf_id, activities) in samples {
@@ -372,6 +545,33 @@ pub fn compute_activity_findings(
     }
 
     findings
+}
+
+/// Extract a short snippet around a pattern match in a string
+fn extract_snippet(text: &str, pattern: &str) -> String {
+    let lower = text.to_lowercase();
+    if let Some(pos) = lower.find(pattern) {
+        let start = pos.saturating_sub(20);
+        let end = (pos + pattern.len() + 40).min(text.len());
+        let snippet = &text[start..end];
+        let snippet = snippet.replace('\n', " ");
+        if start > 0 || end < text.len() {
+            format!("...{}...", snippet.trim())
+        } else {
+            snippet.trim().to_string()
+        }
+    } else {
+        truncate(text, 60)
+    }
+}
+
+/// Truncate a string to max_len characters
+fn truncate(s: &str, max_len: usize) -> String {
+    if s.len() > max_len {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
+    } else {
+        s.to_string()
+    }
 }
 
 /// Select workflows for history sampling. Prioritizes: failed → running → recent completed.
@@ -907,6 +1107,108 @@ mod tests {
         assert_eq!(ranked[0].severity, InsightSeverity::Critical);
         assert_eq!(ranked[1].severity, InsightSeverity::Warning);
         assert_eq!(ranked[2].severity, InsightSeverity::Info);
+    }
+
+    // --- Activity Retry tests ---
+
+    #[test]
+    fn test_activity_retry_detected() {
+        let samples = vec![
+            ("wf-1".to_string(), vec![make_activity("SendEmail", ActivityStatus::Completed, 3, Some(50), Some(5))]),
+            ("wf-2".to_string(), vec![make_activity("SendEmail", ActivityStatus::Completed, 2, Some(50), Some(5))]),
+        ];
+
+        let findings = compute_activity_findings(&samples);
+        let retry_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ActivityRetry)
+            .collect();
+
+        assert_eq!(retry_findings.len(), 1);
+        assert!(retry_findings[0].title.contains("SendEmail"));
+        assert!(retry_findings[0].title.contains("2 retried")); // 2 activities with attempt >= 2
+    }
+
+    #[test]
+    fn test_activity_retry_not_triggered_for_attempt_1() {
+        let samples = vec![
+            ("wf-1".to_string(), vec![make_activity("SendEmail", ActivityStatus::Completed, 1, Some(50), Some(5))]),
+            ("wf-2".to_string(), vec![make_activity("SendEmail", ActivityStatus::Completed, 1, Some(50), Some(5))]),
+        ];
+
+        let findings = compute_activity_findings(&samples);
+        let retry_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ActivityRetry)
+            .collect();
+
+        assert!(retry_findings.is_empty());
+    }
+
+    // --- Error in I/O tests ---
+
+    #[test]
+    fn test_error_in_output_detected() {
+        let mut a1 = make_activity("ProcessPayment", ActivityStatus::Completed, 1, Some(50), Some(5));
+        a1.output = Some(serde_json::json!({"status": "ok", "message": "Handled gracefully but encountered an Error during processing"}));
+        let mut a2 = make_activity("ProcessPayment", ActivityStatus::Completed, 1, Some(50), Some(5));
+        a2.output = Some(serde_json::json!({"result": "partial", "exception_count": 3, "details": "caught Exception in handler"}));
+
+        let samples = vec![
+            ("wf-1".to_string(), vec![a1]),
+            ("wf-2".to_string(), vec![a2]),
+        ];
+
+        let findings = compute_activity_findings(&samples);
+        let error_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ErrorInOutput)
+            .collect();
+
+        assert_eq!(error_findings.len(), 1);
+        assert!(error_findings[0].title.contains("ProcessPayment"));
+        assert!(error_findings[0].detail.contains("Error patterns detected"));
+    }
+
+    #[test]
+    fn test_error_in_output_not_triggered_for_clean_output() {
+        let mut a1 = make_activity("ProcessPayment", ActivityStatus::Completed, 1, Some(50), Some(5));
+        a1.output = Some(serde_json::json!({"status": "success", "amount": 42.0}));
+
+        let samples = vec![
+            ("wf-1".to_string(), vec![a1]),
+        ];
+
+        let findings = compute_activity_findings(&samples);
+        let error_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ErrorInOutput)
+            .collect();
+
+        assert!(error_findings.is_empty());
+    }
+
+    #[test]
+    fn test_error_in_input_detected() {
+        let mut a1 = make_activity("ValidateInput", ActivityStatus::Completed, 1, Some(50), Some(5));
+        a1.input = Some(serde_json::json!({"data": "retry after timeout error from upstream"}));
+
+        let mut a2 = make_activity("ValidateInput", ActivityStatus::Completed, 1, Some(50), Some(5));
+        a2.input = Some(serde_json::json!({"data": "propagated TIMEOUT from service X"}));
+
+        let samples = vec![
+            ("wf-1".to_string(), vec![a1]),
+            ("wf-2".to_string(), vec![a2]),
+        ];
+
+        let findings = compute_activity_findings(&samples);
+        let error_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.category == InsightCategory::ErrorInOutput)
+            .collect();
+
+        assert_eq!(error_findings.len(), 1);
+        assert!(error_findings[0].title.contains("ValidateInput"));
     }
 
     #[test]
