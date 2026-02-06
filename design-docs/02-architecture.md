@@ -28,7 +28,8 @@ mermaid.initialize({ startOnLoad: true, theme: 'dark', flowchart: { htmlLabels: 
 | Async runtime | **tokio** | The Rust async runtime |
 | Table output | **comfy-table** | Unicode box-drawing, dynamic column widths |
 | Serialization | **serde** | Zero-copy deserialization, derive macros |
-| Release mgmt | **prek** | Automated versioning, changelog, crates.io publish |
+| Pre-commit | **[prek](https://github.com/j178/prek)** | Fast pre-commit hooks: fmt, clippy, test |
+| Release mgmt | **[autorel](https://github.com/mhweiner/autorel)** | Semver from conventional commits, auto-tag + publish |
 | CI/CD | **GitHub Actions** | Build, test, lint, publish on every push/PR |
 
 ---
@@ -244,14 +245,8 @@ Same pattern as **kubectl**, **docker**, **terraform**.
 
 <div class="mermaid">
 graph LR
-    subgraph CLI Mode
-        A1["Error"] --> B1["color_eyre"]
-        B1 --> C1["stderr + exit 1"]
-    end
-    subgraph TUI Mode
-        A2["Error"] --> B2["Action::Error"]
-        B2 --> C2["UI error bar\n(non-fatal)"]
-    end
+    A1["CLI Error"] --> B1["color_eyre"] --> C1["stderr + exit 1"]
+    A2["TUI Error"] --> B2["Action::Error"] --> C2["UI error bar<br>(non-fatal)"]
     style A1 fill:#1d3a47,stroke:#ff6d63,color:#f6e1ce
     style B1 fill:#295264,stroke:#5097b7,color:#f6e1ce
     style C1 fill:#1d3a47,stroke:#ff6d63,color:#f6e1ce
@@ -260,11 +255,14 @@ graph LR
     style C2 fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
 </div>
 
-CLI errors propagate naturally with `?`.
-TUI errors are caught and displayed without crashing.
+In CLI mode, Rust's `?` operator propagates errors up the
+call stack automatically — no try/catch, no explicit matching.
+Errors bubble to `main()` where `color_eyre` formats and exits.
 
-The split is intentional. A CLI tool should fail loudly.
-A TUI should be resilient.
+In TUI mode, crashing would leave the terminal in raw mode.
+So errors become `Action::Error(String)` → a non-fatal UI bar.
+
+**CLI: fail loudly. TUI: stay resilient.**
 
 ---
 
@@ -272,25 +270,24 @@ A TUI should be resilient.
 
 ## Proto Build Strategy
 
-```
-Dev machine (submodule present):
-  build.rs detects proto/temporal-api/
-  → tonic-build regenerates into src/proto/generated/
-  → commit the generated .rs files
-
-crates.io install (no submodule):
-  build.rs skips proto compilation
-  → uses checked-in src/proto/generated/*.rs
-  → zero protoc/proto dependency
-```
+<div class="mermaid">
+graph LR
+    A{"proto/temporal-api/<br>present?"} -->|Yes| B["build.rs:<br>tonic-build"]
+    B --> C["Regenerate<br>src/proto/generated/"]
+    C --> D["Commit .rs files"]
+    A -->|No| E["build.rs:<br>skip compilation"]
+    E --> F["Use checked-in<br>generated/*.rs"]
+    F --> G["Zero protoc<br>dependency"]
+    style A fill:#295264,stroke:#ff6d63,color:#f6e1ce
+    style B fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style C fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style D fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+    style E fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style F fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style G fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+</div>
 
 **Why not ship .proto files?**
 - Saves ~2.5 MiB of raw protos from the package
 - Eliminates protoc system dependency for consumers
 - `cargo install tempurview` just works
-
-**To regenerate** (after updating proto submodule):
-```bash
-git submodule update --remote proto/temporal-api
-cargo build   # build.rs regenerates src/proto/generated/
-```

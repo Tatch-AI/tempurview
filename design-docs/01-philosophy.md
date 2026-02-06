@@ -11,9 +11,9 @@ mermaid.initialize({ startOnLoad: true, theme: 'dark', flowchart: { htmlLabels: 
 
 # TemPurview
 
-### A CLI-first terminal tool for Temporal workflows
+### CLI-first SRE tooling for Temporal workflows at scale
 
-Built for operators who think in pipelines,
+Built for operators and AI agents who think in pipelines,
 not dashboards.
 
 ---
@@ -51,6 +51,117 @@ TemPurview's `insight scan` semantics exist to cut through the noise.
 
 ---
 
+<!-- _class: compact -->
+
+## Existing Alternatives: The Dashboard Path
+
+**[Temporal + Prometheus + Grafana](https://docs.temporal.io/cloud/metrics/prometheus-grafana)**
+
+- Temporal Cloud exposes metrics via a Prometheus-compatible endpoint
+- SDK metrics require instrumenting each worker with a Prometheus registry
+- Grafana dashboards visualize state transitions, latency percentiles, task queue depth
+
+**What it gives you**: infrastructure health, aggregate throughput, latency P99s
+
+**What it doesn't**:
+- No visibility into **why** workflows are failing — only **that** they are
+- No correlation between retries, activity errors, and workflow outcomes
+- No semantic analysis — "ProcessPayment retried 13 times" is invisible in a time-series graph
+- Requires **separate infrastructure** (Prometheus, Grafana, cert management, dashboard authoring)
+
+Dashboards answer "is the system healthy?"
+They don't answer "what is going wrong and where?"
+
+---
+
+## Existing Alternatives: The Web UI
+
+**[Temporal Web UI](https://docs.temporal.io/web-ui)**
+
+- Shows workflow executions within the retention period
+- Per-workflow detail: status, history, pending activities
+- Search Attributes enable custom filtering
+- Limited to 20 saved views
+
+**What it gives you**: deep drill-down into individual workflows
+
+**What it doesn't**:
+- **No fleet-level analysis** — you see one workflow at a time
+- No aggregation: "which activity type fails the most?" requires manual inspection
+- No automation: can't pipe results into scripts or alerting
+- Browser-based — doesn't compose with Unix tooling or AI agents
+
+The Web UI is built for **exploration**.
+Not for **operational answers at scale**.
+
+---
+
+## Existing Alternatives: The Observability Platform Path
+
+**[Pydantic Logfire](https://pydantic.dev/logfire)** — AI observability built on OpenTelemetry
+
+- Unified traces, metrics, logs across LLMs, agents, and full app stack
+- SQL query interface for flexible data exploration
+- Live span viewing, cost tracking, token analytics
+- Native SDKs for Python, TypeScript, Rust
+- OpenTelemetry-based — any OTel-instrumented framework works automatically
+
+**What it gives you**: deep visibility into **application-level** behavior —
+LLM calls, agent reasoning chains, API latency, database queries
+
+**What it doesn't**:
+- **Temporal-unaware** — sees spans and traces, not workflow semantics
+- Can't answer "which activity type retries the most across my fleet?"
+- No concept of workflow status, retry storms, or failure rate patterns
+- Requires instrumentation in your application code
+- **SaaS product** — data leaves your infrastructure ($49-$249/mo)
+
+Logfire sees the **trees** (individual traces).
+TemPurview sees the **forest** (fleet-level patterns via Temporal's own APIs).
+
+---
+
+## Existing Alternatives: The TUI Path
+
+**[Tempo](https://github.com/galaxy-io/tempo)** (Go, tview + jig)
+
+- Polished TUI with 26 built-in themes, connection profiles, hot-swap
+- Event history in 3 modes: list, tree, and **Gantt-style timeline**
+- Workflow relationship graphs, batch cancel/terminate
+- Uses the official Temporal Go SDK directly
+- Built by the Galaxy team; uses Temporal team's `jig` UI framework
+
+**What it gives you**: the best interactive Temporal TUI available
+
+**What it doesn't**:
+- **TUI-only** — no CLI subcommands, no JSON output, no pipe composability
+- No `insight scan` — no fleet-level analysis or finding algorithms
+- No automation path — can't feed results into scripts or AI agents
+- No web UI mode
+
+Tempo is excellent for **hands-on-keyboard exploration**.
+TemPurview is built for **operators and agents who think in pipelines**.
+
+---
+
+<!-- _class: compact -->
+
+## Where TemPurview Fits
+
+| Approach | Strength | Gap |
+|----------|----------|-----|
+| Grafana + Prometheus | Infrastructure metrics | No semantic analysis of failures |
+| Temporal Web UI | Individual workflow drill-down | No fleet-level patterns |
+| Tempo (TUI) | Rich interactive exploration | No CLI, no automation, no insights |
+| Pydantic Logfire | Application-level traces + LLM observability | Temporal-unaware, SaaS dependency |
+| General observability | Logs + traces + metrics | Temporal-unaware, no workflow semantics |
+| **TemPurview** | **Fleet-level analysis + CLI automation** | **Complements all of the above** |
+
+TemPurview doesn't replace your dashboard or your TUI.
+It answers the questions they can't.
+
+---
+
 ## Design Philosophy
 
 **CLI-first, TUI-enhanced.**
@@ -62,6 +173,25 @@ This is the same philosophy behind:
 - **kubectl** -- every cluster operation is a subcommand
 - **gh** -- GitHub's CLI that made the web UI optional
 - **temporal** -- Temporal's own CLI (which we complement, not replace)
+
+---
+
+## Why the TUI Matters
+
+CLI-first doesn't mean CLI-only.
+
+The TUI is a **critical interface for an invested operator** —
+someone who lives in the system and needs to move fast.
+
+- **Speed**: keyboard-driven navigation across views in seconds, not clicks
+- **Pattern recognition**: scanning a workflow list builds intuition — you start to *see* failure patterns before you can articulate them
+- **Broad strokes first**: status dashboard + workflow list → quick mental model of fleet health
+- **Then delegate**: spot an issue in the TUI, hand it off —
+  run `tpv insight scan` in a script, or point an AI agent
+  at a specific workflow ID for deep analysis
+
+The TUI is where human reasoning meets machine execution.
+You develop the hypothesis. The CLI and agents do the legwork.
 
 ---
 
@@ -107,6 +237,29 @@ tpv config show
 
 Same tool. Two interaction paradigms.
 Zero configuration to switch between them.
+
+---
+
+## Progressive Disclosure in `--help`
+
+The CLI's help hierarchy is **self-documenting**:
+
+```
+tpv --help                      # top-level: all subcommands
+tpv workflow --help             # resource: all actions
+tpv workflow list --help        # action: all flags + env vars
+```
+
+Each level reveals only what's relevant at that depth.
+As nesting grows, the discoverability scales with it.
+
+This is intentional for **AI agent ergonomics**. An LLM
+can navigate the CLI by reading `--help` output at each level —
+no need for an overwhelming
+[Agent Skill](https://agentskills.io) definition
+to steer the agent through every possible flag and subcommand.
+
+The CLI **is** the skill. `--help` **is** the documentation.
 
 ---
 
