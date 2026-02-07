@@ -139,6 +139,7 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('G') => Some(Action::NavigateBottom),
                 KeyCode::Char('/') => match view {
                     View::EventDetail | View::ActivityDetail => Some(Action::OpenSearchInput),
+                    View::InsightDetail | View::WorkflowDetail => None,
                     _ => Some(Action::OpenFilterInput),
                 },
                 KeyCode::Char('r') => Some(Action::Refresh),

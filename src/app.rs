@@ -232,16 +232,18 @@ impl App {
 
         match action {
             Action::NavigateUp => {
+                let half_page = (self.page_size as u16 / 2).max(1);
                 if let Some(scroll) = self.current_scroll_mut() {
-                    *scroll = scroll.saturating_sub(1);
+                    *scroll = scroll.saturating_sub(half_page);
                 } else {
                     self.select_previous();
                 }
                 vec![]
             }
             Action::NavigateDown => {
+                let half_page = (self.page_size as u16 / 2).max(1);
                 if let Some(scroll) = self.current_scroll_mut() {
-                    *scroll = scroll.saturating_add(1);
+                    *scroll = scroll.saturating_add(half_page);
                 } else {
                     self.select_next();
                 }

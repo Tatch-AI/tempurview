@@ -101,7 +101,7 @@ impl HelpBar {
                 ("?", "Help"),
             ],
             (View::InsightDetail, _) => vec![
-                ("j/k", "Scroll"),
+                ("j/k", "Page"),
                 ("^D/^U", "Page"),
                 ("g/G", "Top/Bottom"),
                 ("n/p", "Next/Prev Entity"),

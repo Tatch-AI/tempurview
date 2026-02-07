@@ -929,12 +929,12 @@ pub fn compute_scheduling_overhead_findings(
     findings
 }
 
-/// Extract a short snippet around a pattern match in a string
+/// Extract a snippet around a pattern match in a string with generous context
 fn extract_snippet(text: &str, pattern: &str) -> String {
     let lower = text.to_lowercase();
     if let Some(pos) = lower.find(pattern) {
-        let start = pos.saturating_sub(20);
-        let end = (pos + pattern.len() + 40).min(text.len());
+        let start = pos.saturating_sub(80);
+        let end = (pos + pattern.len() + 120).min(text.len());
         let snippet = &text[start..end];
         let snippet = snippet.replace('\n', " ");
         if start > 0 || end < text.len() {
@@ -943,7 +943,7 @@ fn extract_snippet(text: &str, pattern: &str) -> String {
             snippet.trim().to_string()
         }
     } else {
-        truncate(text, 60)
+        truncate(text, 200)
     }
 }
 
