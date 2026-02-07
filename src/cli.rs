@@ -48,6 +48,14 @@ pub struct GlobalArgs {
     /// Show log file location and recent errors
     #[arg(long, global = true, default_value_t = false)]
     pub logs: bool,
+
+    /// Re-run the command on an interval (polling mode)
+    #[arg(long, global = true, default_value_t = false)]
+    pub watch: bool,
+
+    /// Polling interval in seconds (used with --watch)
+    #[arg(long, global = true, default_value_t = 30)]
+    pub interval: u64,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -102,7 +110,7 @@ pub enum Commands {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum WorkflowAction {
     /// List workflows
     List {
@@ -165,7 +173,7 @@ pub enum WorkflowAction {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum ActivityAction {
     /// List activities for a workflow
     List {
@@ -178,7 +186,7 @@ pub enum ActivityAction {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum EventAction {
     /// List history events for a workflow
     List {
@@ -191,7 +199,7 @@ pub enum EventAction {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum InsightAction {
     /// Scan workflows for operational insights
     Scan {

@@ -25,7 +25,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
+use std::io::IsTerminal;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
@@ -90,26 +92,97 @@ async fn main() -> color_eyre::Result<()> {
             let client: Arc<dyn TemporalClient> = create_client(&config).await?;
             let format = OutputFormat::resolve(cli.global.output);
 
+            // Build watch config if --watch is set
+            let watch_config = if cli.global.watch {
+                Some(tempurview::watch::WatchConfig {
+                    interval: Duration::from_secs(cli.global.interval),
+                    format,
+                    is_tty: std::io::stdout().is_terminal(),
+                })
+            } else {
+                None
+            };
+
             match cmd {
                 tempurview::cli::Commands::Workflow { action } => {
-                    commands::workflow::handle(action, client.as_ref(), format, config.default_limit)
+                    if let Some(ref wc) = watch_config {
+                        tempurview::watch::run_watch_loop(wc, || {
+                            let action = action.clone();
+                            let client = client.clone();
+                            let limit = config.default_limit;
+                            async move {
+                                commands::workflow::handle(action, client.as_ref(), format, limit)
+                                    .await
+                            }
+                        })
                         .await
+                    } else {
+                        commands::workflow::handle(
+                            action,
+                            client.as_ref(),
+                            format,
+                            config.default_limit,
+                        )
+                        .await
+                    }
                 }
                 tempurview::cli::Commands::Activity { action } => {
-                    commands::activity::handle(action, client.as_ref(), format).await
+                    if let Some(ref wc) = watch_config {
+                        tempurview::watch::run_watch_loop(wc, || {
+                            let action = action.clone();
+                            let client = client.clone();
+                            async move {
+                                commands::activity::handle(action, client.as_ref(), format).await
+                            }
+                        })
+                        .await
+                    } else {
+                        commands::activity::handle(action, client.as_ref(), format).await
+                    }
                 }
                 tempurview::cli::Commands::Event { action } => {
-                    commands::event::handle(action, client.as_ref(), format).await
+                    if let Some(ref wc) = watch_config {
+                        tempurview::watch::run_watch_loop(wc, || {
+                            let action = action.clone();
+                            let client = client.clone();
+                            async move {
+                                commands::event::handle(action, client.as_ref(), format).await
+                            }
+                        })
+                        .await
+                    } else {
+                        commands::event::handle(action, client.as_ref(), format).await
+                    }
                 }
                 tempurview::cli::Commands::Insight { action } => {
-                    commands::insight::handle(
-                        action,
-                        client.as_ref(),
-                        format,
-                        config.default_limit,
-                        &config,
-                    )
-                    .await
+                    if let Some(ref wc) = watch_config {
+                        let config = config.clone();
+                        tempurview::watch::run_watch_loop(wc, || {
+                            let action = action.clone();
+                            let client = client.clone();
+                            let config = config.clone();
+                            async move {
+                                commands::insight::handle(
+                                    action,
+                                    client.as_ref(),
+                                    format,
+                                    config.default_limit,
+                                    &config,
+                                )
+                                .await
+                            }
+                        })
+                        .await
+                    } else {
+                        commands::insight::handle(
+                            action,
+                            client.as_ref(),
+                            format,
+                            config.default_limit,
+                            &config,
+                        )
+                        .await
+                    }
                 }
                 tempurview::cli::Commands::Serve { port, bind } => {
                     tempurview::web::run_server(client, config, &bind, port).await
