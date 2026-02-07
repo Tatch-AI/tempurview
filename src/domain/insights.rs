@@ -50,6 +50,9 @@ pub enum InsightCategory {
     ErrorInOutput,
     ChildWorkflowFailure,
     ChildWorkflowLatency,
+    SignalStorm,
+    DecisionLatency,
+    SchedulingOverhead,
 }
 
 impl InsightCategory {
@@ -66,6 +69,9 @@ impl InsightCategory {
             Self::ErrorInOutput => "Error in I/O",
             Self::ChildWorkflowFailure => "Child WF Failure",
             Self::ChildWorkflowLatency => "Child WF Latency",
+            Self::SignalStorm => "Signal Storm",
+            Self::DecisionLatency => "Decision Latency",
+            Self::SchedulingOverhead => "Sched Overhead",
         }
     }
 }
@@ -175,8 +181,17 @@ impl InsightThresholds {
     pub const CHILD_WF_LATENCY_WARNING_MS: i64 = 2000;
     pub const CHILD_WF_LATENCY_CRITICAL_MS: i64 = 10000;
 
-    // Sampling
-    pub const MAX_HISTORY_SAMPLES: usize = 30;
+    // Signal storm thresholds (signals per workflow)
+    pub const SIGNAL_STORM_WARNING: usize = 50;
+    pub const SIGNAL_STORM_CRITICAL: usize = 200;
+
+    // Decision latency thresholds (median milliseconds per workflow type)
+    pub const DECISION_LATENCY_WARNING_MS: i64 = 500;
+    pub const DECISION_LATENCY_CRITICAL_MS: i64 = 2000;
+
+    // Scheduling overhead thresholds (median milliseconds per task queue)
+    pub const SCHEDULING_OVERHEAD_WARNING_MS: i64 = 500;
+    pub const SCHEDULING_OVERHEAD_CRITICAL_MS: i64 = 2000;
 
     // Error patterns to scan for in activity I/O (case-insensitive)
     pub const ERROR_PATTERNS: &'static [&'static str] = &[
@@ -221,6 +236,9 @@ mod tests {
         assert_eq!(InsightCategory::ErrorInOutput.label(), "Error in I/O");
         assert_eq!(InsightCategory::ChildWorkflowFailure.label(), "Child WF Failure");
         assert_eq!(InsightCategory::ChildWorkflowLatency.label(), "Child WF Latency");
+        assert_eq!(InsightCategory::SignalStorm.label(), "Signal Storm");
+        assert_eq!(InsightCategory::DecisionLatency.label(), "Decision Latency");
+        assert_eq!(InsightCategory::SchedulingOverhead.label(), "Sched Overhead");
     }
 
     #[test]

@@ -38,14 +38,17 @@ You need algorithms that scan across workflows and surface patterns.
 <div class="mermaid">
 graph TD
     A["Workflow List<br>(all matching filter)"] --> B["List-Level Findings"]
-    A --> C["Priority Sampling<br>(up to 30 histories)"]
+    A --> C["Priority Sampling<br>(all histories)"]
     C --> D["Activity Correlation"]
     C --> E["Child WF Correlation"]
+    C --> R["Raw Event Analysis"]
     D --> F["Activity-Level Findings"]
     E --> G["Child WF Findings"]
+    R --> S["Event-Level Findings"]
     B --> H["Rank & Merge"]
     F --> H
     G --> H
+    S --> H
     H --> I["Ordered InsightFindings"]
     style A fill:#295264,stroke:#5097b7,color:#f6e1ce
     style B fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
@@ -54,11 +57,13 @@ graph TD
     style E fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
     style F fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
     style G fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
+    style R fill:#1d3a47,stroke:#5097b7,color:#f6e1ce
+    style S fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
     style H fill:#295264,stroke:#ff6d63,color:#f6e1ce
     style I fill:#1d3a47,stroke:#22c55e,color:#f6e1ce
 </div>
 
-Layer 1 needs only the workflow list. Layers 2 and 3 need sampled history events.
+Layer 1 needs only the workflow list. Layers 2, 3, and 4 need sampled history events.
 
 ---
 
@@ -68,9 +73,9 @@ The full pipeline runs in `run_insights_scan()`:
 
 1. **Fetch workflows** matching the date filter (ignores status/type filters)
 2. **Compute list-level findings** from workflow metadata alone
-3. **Select up to 30 workflows for history sampling** via priority queue
-4. **Fetch histories** and correlate activities + child workflows
-5. **Compute activity-level + child workflow findings**
+3. **Select all workflows for history sampling** via priority queue
+4. **Fetch histories** and correlate activities + child workflows + raw events
+5. **Compute activity-level + child workflow + event-level findings**
 6. **Rank all findings** by severity, then affected count
 
 Sampling priority order:
@@ -387,6 +392,9 @@ This gives operators the most urgent, highest-impact items at the top.
 | Error in I/O | 2 matches | 5 matches | 12 patterns; allowlist suppression |
 | Child WF Failure | 2 failures | 5 failures | Per child type |
 | Child WF Start Latency | 2s median | 10s median | Per child type |
+| Signal Storm | 50 signals | 200 signals | Per workflow |
+| Decision Latency | 500ms median | 2s median | Per workflow type |
+| Scheduling Overhead | 500ms median | 2s median | Per task queue |
 
 All thresholds are compile-time constants in `InsightThresholds`.
 
@@ -416,48 +424,62 @@ pub trait TemporalClient: Send + Sync {
 
 ---
 
-## Future: Signal Storm Detection
+## Event-Level: Signal Storm
 
-**Idea**: Detect workflows receiving excessive signals in short windows.
+**What it detects**: Workflows receiving excessive `WorkflowExecutionSignaled` events.
 
-History events include `WorkflowExecutionSignaled`. Count signals per
-workflow per time window. Flag workflows with signal rates that suggest
-a producer bug or infinite signal loop.
+Counts signal events per workflow from raw history.
 
-**Available data**: `get_history()` returns signal events with timestamps.
+```rust
+pub const SIGNAL_STORM_WARNING: usize = 50;
+pub const SIGNAL_STORM_CRITICAL: usize = 200;
+```
 
-**Thresholds (proposed)**: Warning at 50 signals/min, Critical at 200/min.
+Reports per-workflow (not grouped by type, since signals are workflow-specific).
 
----
+Example: `notification-42: 187 signals received` -- Warning
 
-## Future: Decision Latency
-
-**Idea**: Detect slow workflow task processing (decision latency).
-
-History events include `WorkflowTaskScheduled` and `WorkflowTaskCompleted`.
-The delta between these reveals how long the worker takes to process
-a decision (evaluate workflow code).
-
-**Available data**: `get_history()` returns both event types with timestamps.
-
-**Why it matters**: High decision latency indicates heavy workflow logic,
-large payloads being deserialized, or an overloaded worker.
+Excessive signaling may indicate a producer bug or infinite signal loop.
 
 ---
 
-## Future: Scheduling Overhead
+## Event-Level: Decision Latency
 
-**Idea**: Measure the gap between `ActivityTaskScheduled` and
-`ActivityTaskStarted` at the event level (not just queue wait).
+**What it detects**: Slow workflow task processing (decision latency).
 
-This is similar to Queue Wait Latency but operates at individual event
-granularity rather than the correlated activity view. It captures
-scheduling overhead that might be masked by aggregation.
+Measures the delta between `WorkflowTaskScheduled` and `WorkflowTaskCompleted`,
+grouped by workflow type. Reports the median.
 
-**Available data**: Both event types exist in `get_history()` output.
+```rust
+pub const DECISION_LATENCY_WARNING_MS: i64 = 500;
+pub const DECISION_LATENCY_CRITICAL_MS: i64 = 2000;
+```
 
-**Why it matters**: Scheduling overhead spikes can indicate task queue
-starvation even when median queue wait looks acceptable.
+Example: `ReportGeneration: 1.2s median decision latency` -- Warning
+
+High decision latency indicates heavy workflow logic, large payloads
+being deserialized, or an overloaded worker.
+
+---
+
+## Event-Level: Scheduling Overhead
+
+**What it detects**: The gap between `ActivityTaskScheduled` and
+`ActivityTaskStarted` at the raw event level, grouped by task queue.
+
+```rust
+pub const SCHEDULING_OVERHEAD_WARNING_MS: i64 = 500;
+pub const SCHEDULING_OVERHEAD_CRITICAL_MS: i64 = 2000;
+```
+
+**Difference from Queue Wait Latency**: operates at raw event level
+rather than the correlated `ActivityExecution.queue_wait` field. Captures
+every scheduled→started pair including activities that haven't finished.
+
+Example: `'batch-processing': 1.8s median scheduling overhead` -- Warning
+
+Scheduling overhead spikes indicate task queue starvation even when
+median queue wait looks acceptable.
 
 ---
 
@@ -496,7 +518,7 @@ the most common operator questions, and currently requires manual comparison.
 
 ## Deterministic Findings vs. Advisory Signals
 
-The 11 algorithms above are **deterministic**. Same input, same output.
+The 14 algorithms above are **deterministic**. Same input, same output.
 Thresholds are compile-time constants. No randomness, no model weights.
 
 A second class of signal is possible: **AI-generated advisory signals**.
@@ -590,10 +612,11 @@ Thresholds that change require recompilation. This is intentional --
 threshold tuning is an engineering decision, not a runtime knob.
 Wrong thresholds create alert fatigue or missed signals.
 
-**Why sampling (30 max)?**
-Each history fetch is a gRPC call. Fetching all histories would be
-O(n) API calls. Sampling caps cost at 30 while prioritizing the
-workflows most likely to reveal problems.
+**Why priority ordering?**
+Each history fetch is a gRPC call. While all workflows are now sampled,
+the priority queue ensures the most problematic workflows (failed,
+stuck, running) are fetched first, giving accurate results even if
+the scan is interrupted or times out.
 
 **Why ranked output?**
 Operators have limited attention. A flat list of findings requires

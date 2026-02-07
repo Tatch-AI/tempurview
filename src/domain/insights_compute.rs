@@ -1,7 +1,7 @@
 use crate::domain::{
     ActivityExecution, ActivityStatus, ChildWorkflowExecution, ChildWorkflowStatus,
-    InsightCategory, InsightFinding, InsightSeverity, InsightThresholds, InsightsConfig,
-    WorkflowStatus, WorkflowSummary,
+    HistoryEvent, InsightCategory, InsightFinding, InsightSeverity, InsightThresholds,
+    InsightsConfig, WorkflowStatus, WorkflowSummary,
 };
 use chrono::Utc;
 use std::collections::HashMap;
@@ -699,6 +699,230 @@ pub fn compute_child_workflow_findings(
                     trigger_terms: vec![child_type.to_string(), format!("{:.1}s", median_secs)],
                 });
             }
+        }
+    }
+
+    findings
+}
+
+/// Compute findings from raw history events: detect excessive signals per workflow.
+/// Flags workflows that received too many `WorkflowExecutionSignaled` events.
+pub fn compute_signal_findings(
+    samples: &[(String, Vec<HistoryEvent>)],
+) -> Vec<InsightFinding> {
+    let mut findings = Vec::new();
+    let now = Utc::now();
+
+    for (wf_id, events) in samples {
+        let signal_count = events
+            .iter()
+            .filter(|e| e.event_type == "WorkflowExecutionSignaled")
+            .count();
+
+        let severity = if signal_count >= InsightThresholds::SIGNAL_STORM_CRITICAL {
+            Some(InsightSeverity::Critical)
+        } else if signal_count >= InsightThresholds::SIGNAL_STORM_WARNING {
+            Some(InsightSeverity::Warning)
+        } else {
+            None
+        };
+
+        if let Some(severity) = severity {
+            findings.push(InsightFinding {
+                severity,
+                category: InsightCategory::SignalStorm,
+                title: format!("{}: {} signals received", wf_id, signal_count),
+                detail: format!(
+                    "Workflow received {} signals. Excessive signaling may indicate a producer bug or infinite signal loop.",
+                    signal_count
+                ),
+                affected_entities: vec![wf_id.clone()],
+                computed_at: now,
+                trigger_terms: vec![wf_id.clone(), format!("{} signals", signal_count)],
+            });
+        }
+    }
+
+    findings
+}
+
+/// Compute findings from raw history events: detect slow workflow task processing.
+/// Measures the delta between `WorkflowTaskScheduled` and `WorkflowTaskCompleted`
+/// and flags workflow types where the median decision latency exceeds thresholds.
+pub fn compute_decision_latency_findings(
+    samples: &[(String, Vec<HistoryEvent>)],
+) -> Vec<InsightFinding> {
+    let mut findings = Vec::new();
+    let now = Utc::now();
+
+    // Collect decision latencies per workflow type
+    // First, extract workflow type from each workflow's WorkflowExecutionStarted event
+    let mut latencies_by_type: HashMap<String, Vec<i64>> = HashMap::new();
+
+    for (_, events) in samples {
+        // Determine workflow type from the started event
+        let wf_type = events
+            .iter()
+            .find(|e| e.event_type == "WorkflowExecutionStarted")
+            .and_then(|e| e.details.get("workflowType").and_then(|v| v.as_str()))
+            .unwrap_or("Unknown")
+            .to_string();
+
+        // Find WorkflowTaskScheduled → WorkflowTaskCompleted pairs
+        // Build a map of scheduled event_id → timestamp
+        let mut scheduled_times: HashMap<i64, chrono::DateTime<Utc>> = HashMap::new();
+        for event in events {
+            if event.event_type == "WorkflowTaskScheduled" {
+                scheduled_times.insert(event.event_id, event.timestamp);
+            }
+        }
+
+        // For each WorkflowTaskCompleted, find its corresponding scheduled event
+        for event in events {
+            if event.event_type == "WorkflowTaskCompleted" {
+                // The completed event references the scheduled event via scheduled_event_id
+                // or by convention the scheduled event_id is event_id - 2
+                let scheduled_id = event
+                    .details
+                    .get("scheduled_event_id")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(event.event_id - 2);
+
+                if let Some(scheduled_ts) = scheduled_times.get(&scheduled_id) {
+                    let delta_ms = (event.timestamp - *scheduled_ts).num_milliseconds();
+                    if delta_ms >= 0 {
+                        latencies_by_type
+                            .entry(wf_type.clone())
+                            .or_default()
+                            .push(delta_ms);
+                    }
+                }
+            }
+        }
+    }
+
+    // Compute median per workflow type and flag
+    for (wf_type, mut latencies) in latencies_by_type {
+        if latencies.is_empty() {
+            continue;
+        }
+        latencies.sort();
+        let median = latencies[latencies.len() / 2];
+
+        let severity = if median >= InsightThresholds::DECISION_LATENCY_CRITICAL_MS {
+            Some(InsightSeverity::Critical)
+        } else if median >= InsightThresholds::DECISION_LATENCY_WARNING_MS {
+            Some(InsightSeverity::Warning)
+        } else {
+            None
+        };
+
+        if let Some(severity) = severity {
+            let median_secs = median as f64 / 1000.0;
+            findings.push(InsightFinding {
+                severity,
+                category: InsightCategory::DecisionLatency,
+                title: format!(
+                    "{}: {:.1}s median decision latency",
+                    wf_type, median_secs
+                ),
+                detail: format!(
+                    "Measured across {} workflow task pairs. High decision latency indicates heavy workflow logic, large payloads, or overloaded workers.",
+                    latencies.len()
+                ),
+                affected_entities: vec![wf_type.clone()],
+                computed_at: now,
+                trigger_terms: vec![wf_type, format!("{:.1}s", median_secs)],
+            });
+        }
+    }
+
+    findings
+}
+
+/// Compute findings from raw history events: detect scheduling overhead.
+/// Measures the gap between `ActivityTaskScheduled` and `ActivityTaskStarted`
+/// at the event level, grouped by task queue.
+pub fn compute_scheduling_overhead_findings(
+    samples: &[(String, Vec<HistoryEvent>)],
+) -> Vec<InsightFinding> {
+    let mut findings = Vec::new();
+    let now = Utc::now();
+
+    // Map: scheduled_event_id → (timestamp, task_queue)
+    // Then match with ActivityTaskStarted events
+    let mut overheads_by_queue: HashMap<String, Vec<i64>> = HashMap::new();
+
+    for (_, events) in samples {
+        let mut scheduled_info: HashMap<i64, (chrono::DateTime<Utc>, String)> = HashMap::new();
+
+        for event in events {
+            if event.event_type == "ActivityTaskScheduled" {
+                let task_queue = event
+                    .details
+                    .get("task_queue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                scheduled_info.insert(event.event_id, (event.timestamp, task_queue));
+            }
+        }
+
+        for event in events {
+            if event.event_type == "ActivityTaskStarted" {
+                let scheduled_id = event
+                    .details
+                    .get("scheduled_event_id")
+                    .and_then(|v| v.as_i64());
+
+                if let Some(sched_id) = scheduled_id {
+                    if let Some((sched_ts, ref queue)) = scheduled_info.get(&sched_id) {
+                        let delta_ms = (event.timestamp - *sched_ts).num_milliseconds();
+                        if delta_ms >= 0 {
+                            overheads_by_queue
+                                .entry(queue.clone())
+                                .or_default()
+                                .push(delta_ms);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Compute median per task queue and flag
+    for (queue, mut overheads) in overheads_by_queue {
+        if overheads.is_empty() {
+            continue;
+        }
+        overheads.sort();
+        let median = overheads[overheads.len() / 2];
+
+        let severity = if median >= InsightThresholds::SCHEDULING_OVERHEAD_CRITICAL_MS {
+            Some(InsightSeverity::Critical)
+        } else if median >= InsightThresholds::SCHEDULING_OVERHEAD_WARNING_MS {
+            Some(InsightSeverity::Warning)
+        } else {
+            None
+        };
+
+        if let Some(severity) = severity {
+            let median_secs = median as f64 / 1000.0;
+            findings.push(InsightFinding {
+                severity,
+                category: InsightCategory::SchedulingOverhead,
+                title: format!(
+                    "'{}': {:.1}s median scheduling overhead",
+                    queue, median_secs
+                ),
+                detail: format!(
+                    "Measured across {} scheduled→started pairs. High overhead indicates task queue starvation or insufficient workers.",
+                    overheads.len()
+                ),
+                affected_entities: vec![queue.clone()],
+                computed_at: now,
+                trigger_terms: vec![queue, format!("{:.1}s", median_secs)],
+            });
         }
     }
 
@@ -1623,5 +1847,226 @@ mod tests {
 
         let findings = compute_child_workflow_findings(&samples);
         assert!(findings.is_empty());
+    }
+
+    // --- compute_signal_findings tests ---
+
+    fn make_events_with_signals(wf_type: &str, signal_count: usize) -> Vec<HistoryEvent> {
+        let now = Utc::now();
+        let mut events = vec![
+            HistoryEvent {
+                event_id: 1,
+                event_type: "WorkflowExecutionStarted".to_string(),
+                timestamp: now - Duration::minutes(10),
+                details: serde_json::json!({"workflowType": wf_type}),
+            },
+        ];
+        for i in 0..signal_count {
+            events.push(HistoryEvent {
+                event_id: (i + 2) as i64,
+                event_type: "WorkflowExecutionSignaled".to_string(),
+                timestamp: now - Duration::minutes(10) + Duration::seconds(i as i64),
+                details: serde_json::json!({"signalName": "update"}),
+            });
+        }
+        events
+    }
+
+    #[test]
+    fn test_signal_storm_warning() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_signals("TestWf", 60)),
+        ];
+        let findings = compute_signal_findings(&samples);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, InsightSeverity::Warning);
+        assert!(findings[0].title.contains("wf-1"));
+        assert!(findings[0].title.contains("60 signals"));
+    }
+
+    #[test]
+    fn test_signal_storm_critical() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_signals("TestWf", 250)),
+        ];
+        let findings = compute_signal_findings(&samples);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, InsightSeverity::Critical);
+    }
+
+    #[test]
+    fn test_signal_storm_below_threshold() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_signals("TestWf", 10)),
+        ];
+        let findings = compute_signal_findings(&samples);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_signal_storm_multiple_workflows() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_signals("TestWf", 60)),
+            ("wf-2".to_string(), make_events_with_signals("TestWf", 10)),
+            ("wf-3".to_string(), make_events_with_signals("TestWf", 250)),
+        ];
+        let findings = compute_signal_findings(&samples);
+        // wf-1: warning, wf-3: critical, wf-2: nothing
+        assert_eq!(findings.len(), 2);
+    }
+
+    // --- compute_decision_latency_findings tests ---
+
+    fn make_events_with_decision_latency(wf_type: &str, latency_ms: i64, pairs: usize) -> Vec<HistoryEvent> {
+        let now = Utc::now();
+        let mut events = vec![
+            HistoryEvent {
+                event_id: 1,
+                event_type: "WorkflowExecutionStarted".to_string(),
+                timestamp: now - Duration::minutes(10),
+                details: serde_json::json!({"workflowType": wf_type}),
+            },
+        ];
+        let mut eid = 2i64;
+        for i in 0..pairs {
+            let sched_ts = now - Duration::minutes(10) + Duration::seconds((i * 10) as i64);
+            let sched_eid = eid;
+            events.push(HistoryEvent {
+                event_id: eid,
+                event_type: "WorkflowTaskScheduled".to_string(),
+                timestamp: sched_ts,
+                details: serde_json::json!({}),
+            });
+            eid += 1;
+            events.push(HistoryEvent {
+                event_id: eid,
+                event_type: "WorkflowTaskStarted".to_string(),
+                timestamp: sched_ts + Duration::milliseconds(latency_ms / 2),
+                details: serde_json::json!({"scheduled_event_id": sched_eid}),
+            });
+            eid += 1;
+            events.push(HistoryEvent {
+                event_id: eid,
+                event_type: "WorkflowTaskCompleted".to_string(),
+                timestamp: sched_ts + Duration::milliseconds(latency_ms),
+                details: serde_json::json!({"scheduled_event_id": sched_eid}),
+            });
+            eid += 1;
+        }
+        events
+    }
+
+    #[test]
+    fn test_decision_latency_warning() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_decision_latency("SlowWorkflow", 800, 3)),
+            ("wf-2".to_string(), make_events_with_decision_latency("SlowWorkflow", 600, 3)),
+        ];
+        let findings = compute_decision_latency_findings(&samples);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, InsightSeverity::Warning);
+        assert!(findings[0].title.contains("SlowWorkflow"));
+    }
+
+    #[test]
+    fn test_decision_latency_critical() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_decision_latency("VerySlowWf", 3000, 3)),
+            ("wf-2".to_string(), make_events_with_decision_latency("VerySlowWf", 2500, 3)),
+        ];
+        let findings = compute_decision_latency_findings(&samples);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, InsightSeverity::Critical);
+    }
+
+    #[test]
+    fn test_decision_latency_below_threshold() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_decision_latency("FastWf", 50, 3)),
+        ];
+        let findings = compute_decision_latency_findings(&samples);
+        assert!(findings.is_empty());
+    }
+
+    // --- compute_scheduling_overhead_findings tests ---
+
+    fn make_events_with_scheduling_overhead(queue: &str, overhead_ms: i64, pairs: usize) -> Vec<HistoryEvent> {
+        let now = Utc::now();
+        let mut events = vec![
+            HistoryEvent {
+                event_id: 1,
+                event_type: "WorkflowExecutionStarted".to_string(),
+                timestamp: now - Duration::minutes(10),
+                details: serde_json::json!({"workflowType": "TestWf"}),
+            },
+        ];
+        let mut eid = 2i64;
+        for i in 0..pairs {
+            let sched_ts = now - Duration::minutes(10) + Duration::seconds((i * 10) as i64);
+            let sched_eid = eid;
+            events.push(HistoryEvent {
+                event_id: eid,
+                event_type: "ActivityTaskScheduled".to_string(),
+                timestamp: sched_ts,
+                details: serde_json::json!({
+                    "activity_id": format!("{}", i + 1),
+                    "activity_type": "TestActivity",
+                    "task_queue": queue,
+                }),
+            });
+            eid += 1;
+            events.push(HistoryEvent {
+                event_id: eid,
+                event_type: "ActivityTaskStarted".to_string(),
+                timestamp: sched_ts + Duration::milliseconds(overhead_ms),
+                details: serde_json::json!({"scheduled_event_id": sched_eid}),
+            });
+            eid += 1;
+        }
+        events
+    }
+
+    #[test]
+    fn test_scheduling_overhead_warning() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_scheduling_overhead("slow-queue", 800, 3)),
+            ("wf-2".to_string(), make_events_with_scheduling_overhead("slow-queue", 600, 3)),
+        ];
+        let findings = compute_scheduling_overhead_findings(&samples);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, InsightSeverity::Warning);
+        assert!(findings[0].title.contains("slow-queue"));
+    }
+
+    #[test]
+    fn test_scheduling_overhead_critical() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_scheduling_overhead("starved-queue", 3000, 3)),
+            ("wf-2".to_string(), make_events_with_scheduling_overhead("starved-queue", 2500, 3)),
+        ];
+        let findings = compute_scheduling_overhead_findings(&samples);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, InsightSeverity::Critical);
+    }
+
+    #[test]
+    fn test_scheduling_overhead_below_threshold() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_scheduling_overhead("fast-queue", 50, 3)),
+        ];
+        let findings = compute_scheduling_overhead_findings(&samples);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_scheduling_overhead_multiple_queues() {
+        let samples = vec![
+            ("wf-1".to_string(), make_events_with_scheduling_overhead("slow-queue", 800, 3)),
+            ("wf-2".to_string(), make_events_with_scheduling_overhead("fast-queue", 50, 3)),
+        ];
+        let findings = compute_scheduling_overhead_findings(&samples);
+        // Only slow-queue should trigger
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("slow-queue"));
     }
 }

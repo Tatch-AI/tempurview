@@ -282,6 +282,15 @@ impl TemporalClient for MockTemporalClient {
             .ok_or_else(|| ClientError::NotFound(workflow_id.to_string()))?;
 
         let mut rng = rand::thread_rng();
+
+        // Decision latency for first workflow task: varies by workflow type
+        let first_wt_latency_ms = if workflow.workflow_type == "ReportGenerationWorkflow" {
+            // Slow decision latency for report generation → triggers DecisionLatency finding
+            rng.gen_range(600..1500)
+        } else {
+            rng.gen_range(5..100)
+        };
+
         let mut events = vec![
             HistoryEvent {
                 event_id: 1,
@@ -298,14 +307,14 @@ impl TemporalClient for MockTemporalClient {
             HistoryEvent {
                 event_id: 3,
                 event_type: "WorkflowTaskStarted".to_string(),
-                timestamp: workflow.start_time,
-                details: serde_json::json!({}),
+                timestamp: workflow.start_time + Duration::milliseconds(first_wt_latency_ms / 2),
+                details: serde_json::json!({"scheduled_event_id": 2}),
             },
             HistoryEvent {
                 event_id: 4,
                 event_type: "WorkflowTaskCompleted".to_string(),
-                timestamp: workflow.start_time,
-                details: serde_json::json!({}),
+                timestamp: workflow.start_time + Duration::milliseconds(first_wt_latency_ms),
+                details: serde_json::json!({"scheduled_event_id": 2}),
             },
         ];
 
@@ -484,6 +493,60 @@ impl TemporalClient for MockTemporalClient {
                 }
             }
             event_id += 1;
+        }
+
+        // Generate additional workflow task pairs at various points in the history
+        // to provide more decision latency data points
+        for _ in 0..rng.gen_range(1..=3) {
+            let wt_offset = Duration::seconds(rng.gen_range(30..120));
+            let wt_sched_ts = workflow.start_time + wt_offset;
+            let wt_sched_eid = event_id;
+            let wt_latency_ms = if workflow.workflow_type == "ReportGenerationWorkflow" {
+                rng.gen_range(600..1500)
+            } else {
+                rng.gen_range(5..100)
+            };
+
+            events.push(HistoryEvent {
+                event_id,
+                event_type: "WorkflowTaskScheduled".to_string(),
+                timestamp: wt_sched_ts,
+                details: serde_json::json!({}),
+            });
+            event_id += 1;
+
+            events.push(HistoryEvent {
+                event_id,
+                event_type: "WorkflowTaskStarted".to_string(),
+                timestamp: wt_sched_ts + Duration::milliseconds(wt_latency_ms / 2),
+                details: serde_json::json!({"scheduled_event_id": wt_sched_eid}),
+            });
+            event_id += 1;
+
+            events.push(HistoryEvent {
+                event_id,
+                event_type: "WorkflowTaskCompleted".to_string(),
+                timestamp: wt_sched_ts + Duration::milliseconds(wt_latency_ms),
+                details: serde_json::json!({"scheduled_event_id": wt_sched_eid}),
+            });
+            event_id += 1;
+        }
+
+        // Generate signal events for NotificationWorkflow to trigger Signal Storm
+        if workflow.workflow_type == "NotificationWorkflow" {
+            let num_signals = rng.gen_range(50..=300);
+            for s in 0..num_signals {
+                events.push(HistoryEvent {
+                    event_id,
+                    event_type: "WorkflowExecutionSignaled".to_string(),
+                    timestamp: workflow.start_time + Duration::seconds(s as i64),
+                    details: serde_json::json!({
+                        "signalName": "notify",
+                        "input": {"target": format!("user-{}", s)},
+                    }),
+                });
+                event_id += 1;
+            }
         }
 
         Ok(events)

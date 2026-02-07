@@ -1,8 +1,9 @@
 use crate::client::{ClientResult, TemporalClient};
 use crate::domain::{
-    compute_activity_findings, compute_child_workflow_findings, compute_list_findings,
+    compute_activity_findings, compute_child_workflow_findings, compute_decision_latency_findings,
+    compute_list_findings, compute_scheduling_overhead_findings, compute_signal_findings,
     correlate_activities, correlate_child_workflows, rank_findings, select_workflows_for_sampling,
-    InsightThresholds, InsightsConfig, InsightsResult, WorkflowFilter,
+    InsightsConfig, InsightsResult, WorkflowFilter,
 };
 use chrono::Utc;
 use tracing::{debug, info};
@@ -41,14 +42,15 @@ pub async fn run_insights_scan(
     // Step 2: Compute list-level findings
     let mut all_findings = compute_list_findings(&workflows);
 
-    // Step 3: Select workflows for history sampling
+    // Step 3: Select workflows for history sampling (all workflows, priority-ordered)
     let samples_to_fetch =
-        select_workflows_for_sampling(&workflows, InsightThresholds::MAX_HISTORY_SAMPLES);
+        select_workflows_for_sampling(&workflows, workflows.len());
 
-    // Step 4: Fetch histories and correlate activities + child workflows
+    // Step 4: Fetch histories and correlate activities + child workflows + raw events
     let mut activity_samples: Vec<(String, Vec<crate::domain::ActivityExecution>)> = Vec::new();
     let mut child_wf_samples: Vec<(String, Vec<crate::domain::ChildWorkflowExecution>)> =
         Vec::new();
+    let mut event_samples: Vec<(String, Vec<crate::domain::HistoryEvent>)> = Vec::new();
     for wf in &samples_to_fetch {
         match client
             .get_history(&wf.workflow_id, Some(&wf.run_id))
@@ -62,6 +64,8 @@ pub async fn run_insights_scan(
                 if !child_workflows.is_empty() {
                     child_wf_samples.push((wf.workflow_id.clone(), child_workflows));
                 }
+
+                event_samples.push((wf.workflow_id.clone(), events));
             }
             Err(e) => {
                 debug!(
@@ -85,6 +89,11 @@ pub async fn run_insights_scan(
     // Step 5b: Compute child workflow findings
     let child_wf_findings = compute_child_workflow_findings(&child_wf_samples);
     all_findings.extend(child_wf_findings);
+
+    // Step 5c: Compute event-level findings (signal storm, decision latency, scheduling overhead)
+    all_findings.extend(compute_signal_findings(&event_samples));
+    all_findings.extend(compute_decision_latency_findings(&event_samples));
+    all_findings.extend(compute_scheduling_overhead_findings(&event_samples));
 
     // Step 6: Rank all findings
     let findings = rank_findings(all_findings);
