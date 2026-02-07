@@ -3,13 +3,35 @@ use crate::client::TemporalClient;
 use crate::config::Config;
 use crate::domain::{parse_date_input, run_insights_scan, WorkflowFilter};
 use crate::output::{self, OutputFormat};
+use std::io::Write;
 
+/// Handle insight commands, printing to stdout.
 pub async fn handle(
     action: InsightAction,
     client: &dyn TemporalClient,
     format: OutputFormat,
     limit: u32,
     config: &Config,
+) -> color_eyre::Result<()> {
+    handle_to(
+        action,
+        client,
+        format,
+        limit,
+        config,
+        &mut std::io::stdout(),
+    )
+    .await
+}
+
+/// Handle insight commands, writing output to the given writer.
+pub async fn handle_to(
+    action: InsightAction,
+    client: &dyn TemporalClient,
+    format: OutputFormat,
+    limit: u32,
+    config: &Config,
+    w: &mut (dyn Write + Send),
 ) -> color_eyre::Result<()> {
     match action {
         InsightAction::Scan { since, before } => {
@@ -27,7 +49,7 @@ pub async fn handle(
 
             let result =
                 run_insights_scan(client, &filter, limit, &config.insights).await?;
-            output::print_output(&result, format);
+            output::write_output(&result, format, w);
         }
     }
     Ok(())

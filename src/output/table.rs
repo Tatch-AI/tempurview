@@ -130,9 +130,9 @@ impl TableDisplay for InsightsResult {
                 Cell::new(f.affected_entities.len()),
             ]);
         }
-        // Summary footer
+        // Summary footer (stderr so it doesn't interfere with stdout capture)
         let dur = format_duration(&self.scan_duration);
-        println!(
+        eprintln!(
             "Scanned {} workflows, fetched {} histories in {}. {} findings.",
             self.workflows_scanned,
             self.histories_fetched,

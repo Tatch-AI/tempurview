@@ -1,13 +1,26 @@
-use crate::cli::WorkflowAction;
+use crate::cli::{SortOrder, WorkflowAction};
 use crate::client::TemporalClient;
 use crate::domain::{parse_date_input, WorkflowFilter, WorkflowStatus};
 use crate::output::{self, OutputFormat};
+use std::io::Write;
 
+/// Handle workflow commands, printing to stdout.
 pub async fn handle(
     action: WorkflowAction,
     client: &dyn TemporalClient,
     format: OutputFormat,
     limit: u32,
+) -> color_eyre::Result<()> {
+    handle_to(action, client, format, limit, &mut std::io::stdout()).await
+}
+
+/// Handle workflow commands, writing output to the given writer.
+pub async fn handle_to(
+    action: WorkflowAction,
+    client: &dyn TemporalClient,
+    format: OutputFormat,
+    limit: u32,
+    w: &mut (dyn Write + Send),
 ) -> color_eyre::Result<()> {
     match action {
         WorkflowAction::List {
@@ -15,6 +28,7 @@ pub async fn handle(
             workflow_type,
             since,
             before,
+            sort,
         } => {
             let mut filter = WorkflowFilter::new();
             if let Some(s) = status {
@@ -36,16 +50,22 @@ pub async fn handle(
                     .ok_or_else(|| color_eyre::eyre::eyre!("Invalid --before value: {b}"))?;
                 filter = filter.with_start_time_before(dt);
             }
+            let mut workflows = client.list(&filter, limit).await?;
 
-            let workflows = client.list(&filter, limit).await?;
-            output::print_list(&workflows, &workflows, format);
+            // Sort client-side by start_time
+            match sort {
+                SortOrder::Asc => workflows.sort_by(|a, b| a.start_time.cmp(&b.start_time)),
+                SortOrder::Desc => workflows.sort_by(|a, b| b.start_time.cmp(&a.start_time)),
+            }
+
+            output::write_list(&workflows, &workflows, format, w);
         }
         WorkflowAction::Get {
             workflow_id,
             run_id,
         } => {
             let detail = client.describe(&workflow_id, run_id.as_deref()).await?;
-            output::print_output(&detail, format);
+            output::write_output(&detail, format, w);
         }
         WorkflowAction::Count { status, query } => {
             let q = if let Some(s) = status {
@@ -57,7 +77,7 @@ pub async fn handle(
                 query
             };
             let count = client.count(q.as_deref()).await?;
-            output::print_count(count, format);
+            output::write_count(count, format, w);
         }
         WorkflowAction::Cancel {
             workflow_id,

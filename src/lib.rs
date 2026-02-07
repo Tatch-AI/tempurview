@@ -16,6 +16,7 @@ pub mod logging;
 pub mod output;
 pub mod proto;
 pub mod tui;
+pub mod watch;
 pub mod web;
 pub mod widgets;
 
