@@ -106,14 +106,20 @@ async fn main() -> color_eyre::Result<()> {
             match cmd {
                 tempurview::cli::Commands::Workflow { action } => {
                     if let Some(ref wc) = watch_config {
-                        tempurview::watch::run_watch_loop(wc, || {
+                        tempurview::watch::run_watch_loop(wc, |w| {
                             let action = action.clone();
                             let client = client.clone();
                             let limit = config.default_limit;
-                            async move {
-                                commands::workflow::handle(action, client.as_ref(), format, limit)
-                                    .await
-                            }
+                            Box::pin(async move {
+                                commands::workflow::handle_to(
+                                    action,
+                                    client.as_ref(),
+                                    format,
+                                    limit,
+                                    w,
+                                )
+                                .await
+                            })
                         })
                         .await
                     } else {
@@ -128,12 +134,18 @@ async fn main() -> color_eyre::Result<()> {
                 }
                 tempurview::cli::Commands::Activity { action } => {
                     if let Some(ref wc) = watch_config {
-                        tempurview::watch::run_watch_loop(wc, || {
+                        tempurview::watch::run_watch_loop(wc, |w| {
                             let action = action.clone();
                             let client = client.clone();
-                            async move {
-                                commands::activity::handle(action, client.as_ref(), format).await
-                            }
+                            Box::pin(async move {
+                                commands::activity::handle_to(
+                                    action,
+                                    client.as_ref(),
+                                    format,
+                                    w,
+                                )
+                                .await
+                            })
                         })
                         .await
                     } else {
@@ -142,12 +154,18 @@ async fn main() -> color_eyre::Result<()> {
                 }
                 tempurview::cli::Commands::Event { action } => {
                     if let Some(ref wc) = watch_config {
-                        tempurview::watch::run_watch_loop(wc, || {
+                        tempurview::watch::run_watch_loop(wc, |w| {
                             let action = action.clone();
                             let client = client.clone();
-                            async move {
-                                commands::event::handle(action, client.as_ref(), format).await
-                            }
+                            Box::pin(async move {
+                                commands::event::handle_to(
+                                    action,
+                                    client.as_ref(),
+                                    format,
+                                    w,
+                                )
+                                .await
+                            })
                         })
                         .await
                     } else {
@@ -157,20 +175,21 @@ async fn main() -> color_eyre::Result<()> {
                 tempurview::cli::Commands::Insight { action } => {
                     if let Some(ref wc) = watch_config {
                         let config = config.clone();
-                        tempurview::watch::run_watch_loop(wc, || {
+                        tempurview::watch::run_watch_loop(wc, |w| {
                             let action = action.clone();
                             let client = client.clone();
                             let config = config.clone();
-                            async move {
-                                commands::insight::handle(
+                            Box::pin(async move {
+                                commands::insight::handle_to(
                                     action,
                                     client.as_ref(),
                                     format,
                                     config.default_limit,
                                     &config,
+                                    w,
                                 )
                                 .await
-                            }
+                            })
                         })
                         .await
                     } else {

@@ -1,9 +1,11 @@
 //! Watch mode: re-run a CLI command on a polling interval.
 //!
-//! For TTY output, clears the screen and reprints each cycle.
-//! For piped output, appends JSON each cycle (no clearing).
+//! - TTY mode: clears the screen and reprints the full output each cycle.
+//! - Pipe mode: only emits output when it differs from the previous cycle (diff mode).
 
 use crate::output::OutputFormat;
+use std::io::Write;
+use std::pin::Pin;
 use std::future::Future;
 use std::time::Duration;
 use tracing::debug;
@@ -14,25 +16,31 @@ pub struct WatchConfig {
     pub interval: Duration,
     /// Resolved output format (table vs JSON).
     pub format: OutputFormat,
-    /// Whether stdout is a TTY (controls clear-and-reprint vs append).
+    /// Whether stdout is a TTY (controls clear-and-reprint vs diff-only).
     pub is_tty: bool,
 }
 
 /// Run a task in a loop, re-executing every `config.interval` seconds.
 ///
-/// - TTY mode: clears the screen and prints a header with timestamp before each run.
-/// - Pipe mode: runs the task and appends output each cycle.
+/// The task closure receives a `&mut dyn Write` to write its output to.
+///
+/// - TTY mode: clears the screen, prints a header, passes stdout to the task.
+/// - Pipe mode: passes a buffer to the task, compares with previous output,
+///   only writes to real stdout when the output has changed.
 /// - Exits cleanly on Ctrl+C.
-pub async fn run_watch_loop<F, Fut>(config: &WatchConfig, task: F) -> color_eyre::Result<()>
+pub async fn run_watch_loop<F>(config: &WatchConfig, task: F) -> color_eyre::Result<()>
 where
-    F: Fn() -> Fut,
-    Fut: Future<Output = color_eyre::Result<()>>,
+    F: for<'a> Fn(
+        &'a mut (dyn Write + Send),
+    ) -> Pin<Box<dyn Future<Output = color_eyre::Result<()>> + Send + 'a>>,
 {
     let interval_secs = config.interval.as_secs();
     debug!(
         "Watch mode started: interval={}s, is_tty={}",
         interval_secs, config.is_tty
     );
+
+    let mut previous_output: Option<Vec<u8>> = None;
 
     loop {
         if config.is_tty {
@@ -46,11 +54,30 @@ where
                 now.format("%Y-%m-%d %H:%M:%S"),
                 interval_secs,
             );
-        }
 
-        // Run the command; log errors but keep looping
-        if let Err(e) = task().await {
-            eprintln!("Error: {e}");
+            // Write directly to stdout (Stdout is Send, unlike StdoutLock)
+            let mut stdout = std::io::stdout();
+            if let Err(e) = task(&mut stdout).await {
+                eprintln!("Error: {e}");
+            }
+        } else {
+            // Pipe mode: capture into buffer and diff
+            let mut buf: Vec<u8> = Vec::new();
+            if let Err(e) = task(&mut buf).await {
+                eprintln!("Error: {e}");
+            } else {
+                // Only emit if output changed (or first cycle)
+                let changed = match &previous_output {
+                    None => true,
+                    Some(prev) => prev != &buf,
+                };
+                if changed {
+                    let mut stdout = std::io::stdout();
+                    let _ = stdout.write_all(&buf);
+                    let _ = stdout.flush();
+                    previous_output = Some(buf);
+                }
+            }
         }
 
         // Sleep, but exit immediately on Ctrl+C
@@ -74,30 +101,27 @@ where
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     #[tokio::test]
     async fn test_watch_loop_runs_task() {
-        // Verify the task closure is actually invoked
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
         let config = WatchConfig {
             interval: Duration::from_millis(50),
             format: OutputFormat::Json,
-            is_tty: false,
+            is_tty: true,
         };
 
-        // Run the loop in a background task and cancel it after a short delay
         let handle = tokio::spawn(async move {
-            // We can't easily send ctrl_c in tests, so use a timeout wrapper
             let _ = tokio::time::timeout(Duration::from_millis(180), async {
-                run_watch_loop(&config, || {
+                run_watch_loop(&config, |_w| {
                     let c = counter_clone.clone();
-                    async move {
+                    Box::pin(async move {
                         c.fetch_add(1, Ordering::SeqCst);
                         Ok(())
-                    }
+                    })
                 })
                 .await
             })
@@ -106,7 +130,6 @@ mod tests {
 
         handle.await.unwrap();
 
-        // Should have run at least twice in ~180ms with 50ms interval
         let count = counter.load(Ordering::SeqCst);
         assert!(
             count >= 2,
@@ -116,24 +139,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_watch_loop_continues_on_error() {
-        // Verify the loop keeps going even when the task returns an error
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
         let config = WatchConfig {
             interval: Duration::from_millis(50),
             format: OutputFormat::Table,
-            is_tty: false,
+            is_tty: true,
         };
 
         let handle = tokio::spawn(async move {
             let _ = tokio::time::timeout(Duration::from_millis(180), async {
-                run_watch_loop(&config, || {
+                run_watch_loop(&config, |_w| {
                     let c = counter_clone.clone();
-                    async move {
+                    Box::pin(async move {
                         c.fetch_add(1, Ordering::SeqCst);
                         Err(color_eyre::eyre::eyre!("simulated failure"))
-                    }
+                    })
                 })
                 .await
             })
@@ -151,24 +173,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_watch_loop_single_iteration_with_zero_timeout() {
-        // With a very short timeout, should run at least once
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
         let config = WatchConfig {
-            interval: Duration::from_secs(60), // Long interval
+            interval: Duration::from_secs(60),
             format: OutputFormat::Json,
-            is_tty: false,
+            is_tty: true,
         };
 
         let handle = tokio::spawn(async move {
             let _ = tokio::time::timeout(Duration::from_millis(50), async {
-                run_watch_loop(&config, || {
+                run_watch_loop(&config, |_w| {
                     let c = counter_clone.clone();
-                    async move {
+                    Box::pin(async move {
                         c.fetch_add(1, Ordering::SeqCst);
                         Ok(())
-                    }
+                    })
                 })
                 .await
             })
@@ -181,6 +202,112 @@ mod tests {
         assert!(
             count >= 1,
             "Expected task to run at least once, got {count}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pipe_mode_suppresses_identical_output() {
+        // In pipe mode, identical output across cycles should only be emitted once
+        let task_count = Arc::new(AtomicU32::new(0));
+        let task_count_clone = task_count.clone();
+
+        let config = WatchConfig {
+            interval: Duration::from_millis(30),
+            format: OutputFormat::Json,
+            is_tty: false,
+        };
+
+        let handle = tokio::spawn(async move {
+            let _ = tokio::time::timeout(Duration::from_millis(150), async {
+                run_watch_loop(&config, |w| {
+                    let tc = task_count_clone.clone();
+                    Box::pin(async move {
+                        tc.fetch_add(1, Ordering::SeqCst);
+                        let _ = writeln!(w, "same output every time");
+                        Ok(())
+                    })
+                })
+                .await
+            })
+            .await;
+        });
+
+        handle.await.unwrap();
+
+        let tasks_run = task_count.load(Ordering::SeqCst);
+        assert!(
+            tasks_run >= 2,
+            "Expected task to run at least 2 times, got {tasks_run}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pipe_mode_emits_on_change() {
+        // In pipe mode, output should be emitted each time it changes
+        let cycle = Arc::new(AtomicU32::new(0));
+        let cycle_clone = cycle.clone();
+
+        let config = WatchConfig {
+            interval: Duration::from_millis(30),
+            format: OutputFormat::Json,
+            is_tty: false,
+        };
+
+        let handle = tokio::spawn(async move {
+            let _ = tokio::time::timeout(Duration::from_millis(150), async {
+                run_watch_loop(&config, |w| {
+                    let c = cycle_clone.clone();
+                    Box::pin(async move {
+                        let n = c.fetch_add(1, Ordering::SeqCst);
+                        let _ = writeln!(w, "cycle {n}");
+                        Ok(())
+                    })
+                })
+                .await
+            })
+            .await;
+        });
+
+        handle.await.unwrap();
+
+        let cycles_run = cycle.load(Ordering::SeqCst);
+        assert!(
+            cycles_run >= 2,
+            "Expected at least 2 cycles with changing output, got {cycles_run}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pipe_mode_first_cycle_always_emits() {
+        let emitted = Arc::new(Mutex::new(false));
+        let emitted_clone = emitted.clone();
+
+        let config = WatchConfig {
+            interval: Duration::from_secs(60),
+            format: OutputFormat::Json,
+            is_tty: false,
+        };
+
+        let handle = tokio::spawn(async move {
+            let _ = tokio::time::timeout(Duration::from_millis(50), async {
+                run_watch_loop(&config, |w| {
+                    let e = emitted_clone.clone();
+                    Box::pin(async move {
+                        let _ = writeln!(w, "first output");
+                        *e.lock().unwrap() = true;
+                        Ok(())
+                    })
+                })
+                .await
+            })
+            .await;
+        });
+
+        handle.await.unwrap();
+
+        assert!(
+            *emitted.lock().unwrap(),
+            "First cycle should have run and emitted"
         );
     }
 }
