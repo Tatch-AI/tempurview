@@ -210,7 +210,7 @@ impl WorkflowFilter {
             || self.close_time_before.is_some()
     }
 
-    /// Check if the filter has any conditions
+    /// Check if the filter has any conditions (sort order doesn't count as a filter condition)
     pub fn is_empty(&self) -> bool {
         self.status.is_none()
             && self.workflow_type.is_none()
@@ -405,4 +405,5 @@ mod tests {
         let filter = WorkflowFilter::new();
         assert_eq!(filter.description_with_date_label(None), "All workflows");
     }
+
 }

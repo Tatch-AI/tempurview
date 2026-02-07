@@ -64,6 +64,15 @@ pub enum OutputFormatArg {
     Table,
 }
 
+/// Sort order for workflow listing
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+pub enum SortOrder {
+    /// Oldest first (ascending by start time)
+    Asc,
+    /// Newest first (descending by start time, default)
+    Desc,
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Manage workflows
@@ -129,6 +138,10 @@ pub enum WorkflowAction {
         /// Show workflows started before this time
         #[arg(long)]
         before: Option<String>,
+
+        /// Sort order by start time (asc = oldest first, desc = newest first)
+        #[arg(long, value_enum, default_value_t = SortOrder::Desc)]
+        sort: SortOrder,
     },
     /// Get details of a specific workflow
     Get {

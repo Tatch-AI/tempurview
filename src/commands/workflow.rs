@@ -1,4 +1,4 @@
-use crate::cli::WorkflowAction;
+use crate::cli::{SortOrder, WorkflowAction};
 use crate::client::TemporalClient;
 use crate::domain::{parse_date_input, WorkflowFilter, WorkflowStatus};
 use crate::output::{self, OutputFormat};
@@ -28,6 +28,7 @@ pub async fn handle_to(
             workflow_type,
             since,
             before,
+            sort,
         } => {
             let mut filter = WorkflowFilter::new();
             if let Some(s) = status {
@@ -49,8 +50,14 @@ pub async fn handle_to(
                     .ok_or_else(|| color_eyre::eyre::eyre!("Invalid --before value: {b}"))?;
                 filter = filter.with_start_time_before(dt);
             }
+            let mut workflows = client.list(&filter, limit).await?;
 
-            let workflows = client.list(&filter, limit).await?;
+            // Sort client-side by start_time
+            match sort {
+                SortOrder::Asc => workflows.sort_by(|a, b| a.start_time.cmp(&b.start_time)),
+                SortOrder::Desc => workflows.sort_by(|a, b| b.start_time.cmp(&a.start_time)),
+            }
+
             output::write_list(&workflows, &workflows, format, w);
         }
         WorkflowAction::Get {
