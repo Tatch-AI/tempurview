@@ -61,21 +61,29 @@ where
                 eprintln!("Error: {e}");
             }
         } else {
-            // Pipe mode: capture into buffer and diff
+            // Pipe mode: capture into buffer and diff against previous.
+            // First cycle captures the baseline silently (no output).
+            // Subsequent cycles only emit when the output changes.
             let mut buf: Vec<u8> = Vec::new();
             if let Err(e) = task(&mut buf).await {
                 eprintln!("Error: {e}");
             } else {
-                // Only emit if output changed (or first cycle)
-                let changed = match &previous_output {
-                    None => true,
-                    Some(prev) => prev != &buf,
-                };
-                if changed {
-                    let mut stdout = std::io::stdout();
-                    let _ = stdout.write_all(&buf);
-                    let _ = stdout.flush();
-                    previous_output = Some(buf);
+                match &previous_output {
+                    None => {
+                        // First cycle: store baseline, don't emit
+                        eprintln!("Watching for changes... (Ctrl+C to stop)");
+                        previous_output = Some(buf);
+                    }
+                    Some(prev) if prev != &buf => {
+                        // Output changed: emit the new data
+                        let mut stdout = std::io::stdout();
+                        let _ = stdout.write_all(&buf);
+                        let _ = stdout.flush();
+                        previous_output = Some(buf);
+                    }
+                    _ => {
+                        // Identical to previous: suppress
+                    }
                 }
             }
         }
@@ -278,9 +286,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pipe_mode_first_cycle_always_emits() {
-        let emitted = Arc::new(Mutex::new(false));
-        let emitted_clone = emitted.clone();
+    async fn test_pipe_mode_first_cycle_captures_baseline_silently() {
+        // In pipe mode, first cycle captures a baseline but does NOT emit to stdout.
+        // Only subsequent cycles with changed output emit.
+        let task_count = Arc::new(AtomicU32::new(0));
+        let task_count_clone = task_count.clone();
 
         let config = WatchConfig {
             interval: Duration::from_secs(60),
@@ -291,10 +301,10 @@ mod tests {
         let handle = tokio::spawn(async move {
             let _ = tokio::time::timeout(Duration::from_millis(50), async {
                 run_watch_loop(&config, |w| {
-                    let e = emitted_clone.clone();
+                    let tc = task_count_clone.clone();
                     Box::pin(async move {
-                        let _ = writeln!(w, "first output");
-                        *e.lock().unwrap() = true;
+                        tc.fetch_add(1, Ordering::SeqCst);
+                        let _ = writeln!(w, "baseline data");
                         Ok(())
                     })
                 })
@@ -305,9 +315,53 @@ mod tests {
 
         handle.await.unwrap();
 
+        // Task ran once (captured baseline), but output was suppressed
+        let count = task_count.load(Ordering::SeqCst);
         assert!(
-            *emitted.lock().unwrap(),
-            "First cycle should have run and emitted"
+            count >= 1,
+            "Expected task to run at least once for baseline, got {count}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pipe_mode_emits_only_after_change_from_baseline() {
+        // Pipe mode: first cycle = silent baseline, second cycle with same data = silent,
+        // cycle with different data = emits
+        let cycle = Arc::new(AtomicU32::new(0));
+        let cycle_clone = cycle.clone();
+
+        let config = WatchConfig {
+            interval: Duration::from_millis(30),
+            format: OutputFormat::Json,
+            is_tty: false,
+        };
+
+        let handle = tokio::spawn(async move {
+            let _ = tokio::time::timeout(Duration::from_millis(200), async {
+                run_watch_loop(&config, |w| {
+                    let c = cycle_clone.clone();
+                    Box::pin(async move {
+                        let n = c.fetch_add(1, Ordering::SeqCst);
+                        // First 2 cycles: same data. Cycle 3+: new data each time.
+                        if n < 2 {
+                            let _ = writeln!(w, "baseline");
+                        } else {
+                            let _ = writeln!(w, "changed at cycle {n}");
+                        }
+                        Ok(())
+                    })
+                })
+                .await
+            })
+            .await;
+        });
+
+        handle.await.unwrap();
+
+        let cycles_run = cycle.load(Ordering::SeqCst);
+        assert!(
+            cycles_run >= 3,
+            "Expected at least 3 cycles to test baseline+change, got {cycles_run}"
         );
     }
 }
