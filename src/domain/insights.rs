@@ -115,12 +115,23 @@ fn serde_timedelta_ms<S: serde::Serializer>(
 
 /// User-configurable settings for insights analysis.
 /// Loaded from ~/.tempurview/config.toml [insights] section.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct InsightsConfig {
     /// Phrases that suppress error-pattern matches (case-insensitive).
     /// If any allowlisted phrase appears in the same text as an error pattern,
     /// the match is skipped.
     pub allowlist: Vec<String>,
+    /// Max concurrent history fetches during insights scan (default 16).
+    pub concurrency: usize,
+}
+
+impl Default for InsightsConfig {
+    fn default() -> Self {
+        Self {
+            allowlist: Vec::new(),
+            concurrency: 16,
+        }
+    }
 }
 
 impl InsightsConfig {
@@ -130,6 +141,13 @@ impl InsightsConfig {
             .iter()
             .any(|phrase| text_lower.contains(phrase.to_lowercase().as_str()))
     }
+}
+
+/// Phase of an insights scan, used for progress reporting
+#[derive(Debug, Clone, PartialEq)]
+pub enum InsightsScanPhase {
+    FetchingWorkflows { fetched: usize },
+    SamplingHistories { scanned: usize, total: usize },
 }
 
 /// Threshold constants for insight detection
@@ -251,6 +269,7 @@ mod tests {
     fn test_allowlist_matches_case_insensitive() {
         let config = InsightsConfig {
             allowlist: vec!["errors and omissions".to_string()],
+            ..InsightsConfig::default()
         };
         assert!(config.is_allowlisted("reviewing errors and omissions policy"));
         assert!(config.is_allowlisted("reviewing Errors and Omissions policy"));
@@ -261,6 +280,7 @@ mod tests {
     fn test_allowlist_no_match() {
         let config = InsightsConfig {
             allowlist: vec!["errors and omissions".to_string()],
+            ..InsightsConfig::default()
         };
         assert!(!config.is_allowlisted("there was an error in processing"));
     }

@@ -141,10 +141,12 @@ pub async fn get_insights(
 
     let limit = params.limit.unwrap_or(state.config.default_limit);
     let result = run_insights_scan(
-        state.client.as_ref(),
+        state.client.clone(),
         &filter,
         limit,
         &state.config.insights,
+        None,
+        0,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

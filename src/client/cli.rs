@@ -258,13 +258,13 @@ fn parse_workflow_execution(exec: &serde_json::Value) -> ClientResult<WorkflowSu
         .unwrap_or("")
         .to_string();
 
-    let workflow_type = exec
-        .get("type")
-        .and_then(|v| v.get("name"))
-        .and_then(|v| v.as_str())
-        .or_else(|| exec.get("workflowType").and_then(|v| v.as_str()))
-        .unwrap_or("Unknown")
-        .to_string();
+    let workflow_type: std::sync::Arc<str> = std::sync::Arc::from(
+        exec.get("type")
+            .and_then(|v| v.get("name"))
+            .and_then(|v| v.as_str())
+            .or_else(|| exec.get("workflowType").and_then(|v| v.as_str()))
+            .unwrap_or("Unknown"),
+    );
 
     let status_str = exec
         .get("status")
@@ -286,11 +286,11 @@ fn parse_workflow_execution(exec: &serde_json::Value) -> ClientResult<WorkflowSu
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc));
 
-    let task_queue = exec
-        .get("taskQueue")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_string();
+    let task_queue: std::sync::Arc<str> = std::sync::Arc::from(
+        exec.get("taskQueue")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default"),
+    );
 
     Ok(WorkflowSummary {
         workflow_id,
@@ -453,7 +453,7 @@ mod tests {
         let workflows = parse_workflow_list(json).unwrap();
         assert_eq!(workflows.len(), 1);
         assert_eq!(workflows[0].workflow_id, "wf-1");
-        assert_eq!(workflows[0].workflow_type, "TestWorkflow");
+        assert_eq!(&*workflows[0].workflow_type, "TestWorkflow");
         assert_eq!(workflows[0].status, WorkflowStatus::Running);
     }
 

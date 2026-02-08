@@ -18,10 +18,10 @@ impl TableDisplay for Vec<WorkflowSummary> {
         for wf in self {
             table.add_row(vec![
                 status_cell(wf.status),
-                Cell::new(&wf.workflow_type),
+                Cell::new(&*wf.workflow_type),
                 Cell::new(&wf.workflow_id),
                 Cell::new(wf.start_time.format("%Y-%m-%d %H:%M:%S").to_string()),
-                Cell::new(&wf.task_queue),
+                Cell::new(&*wf.task_queue),
             ]);
         }
         table
@@ -36,7 +36,7 @@ impl TableDisplay for WorkflowDetail {
         table.set_header(vec!["FIELD", "VALUE"]);
         table.add_row(vec!["Workflow ID", &self.summary.workflow_id]);
         table.add_row(vec!["Run ID", &self.summary.run_id]);
-        table.add_row(vec!["Type", &self.summary.workflow_type]);
+        table.add_row(vec!["Type", &*self.summary.workflow_type]);
         table.add_row(vec![
             Cell::new("Status"),
             status_cell(self.summary.status),
@@ -51,7 +51,7 @@ impl TableDisplay for WorkflowDetail {
                 &ct.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
             ]);
         }
-        table.add_row(vec!["Task Queue", &self.summary.task_queue]);
+        table.add_row(vec!["Task Queue", &*self.summary.task_queue]);
         table.add_row(vec!["History Length", &self.history_length.to_string()]);
         if let Some(ref input) = self.input {
             table.add_row(vec!["Input", &compact_json(input)]);

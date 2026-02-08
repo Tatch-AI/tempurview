@@ -111,10 +111,10 @@ fn test_app_refresh_triggers_loading() {
     // LoadCounts queries count for all statuses from API
     assert!(effects
         .iter()
-        .any(|e| matches!(e, tempurview::Effect::LoadCounts)));
+        .any(|e| matches!(e, tempurview::Effect::LoadCounts { .. })));
     assert!(effects
         .iter()
-        .any(|e| matches!(e, tempurview::Effect::LoadWorkflows)));
+        .any(|e| matches!(e, tempurview::Effect::LoadWorkflows { .. })));
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn test_app_status_filter_triggers_reload() {
     assert_eq!(app.filter.status, Some(WorkflowStatus::Failed));
     assert!(effects
         .iter()
-        .any(|e| matches!(e, tempurview::Effect::LoadWorkflows)));
+        .any(|e| matches!(e, tempurview::Effect::LoadWorkflows { .. })));
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn test_app_clear_filters() {
     assert!(app.filter.is_empty());
     assert!(effects
         .iter()
-        .any(|e| matches!(e, tempurview::Effect::LoadWorkflows)));
+        .any(|e| matches!(e, tempurview::Effect::LoadWorkflows { .. })));
 }
 
 #[test]
@@ -268,7 +268,7 @@ async fn test_full_refresh_cycle() {
 
     // Simulate loading workflows
     let workflows = client.list(&app.filter, 50).await.unwrap();
-    app.update(Action::DataLoaded(DataPayload::Workflows(workflows)));
+    app.update(Action::DataLoaded(DataPayload::Workflows(workflows, app.workflows_load_gen)));
 
     // Verify state
     assert!(matches!(app.status_counts, LoadState::Loaded(_)));
@@ -289,7 +289,7 @@ async fn test_filter_and_list_workflow() {
 
     // Load workflows with filter
     let workflows = client.list(&app.filter, 100).await.unwrap();
-    app.update(Action::DataLoaded(DataPayload::Workflows(workflows)));
+    app.update(Action::DataLoaded(DataPayload::Workflows(workflows, app.workflows_load_gen)));
 
     // Verify all loaded workflows match filter
     if let LoadState::Loaded(wfs) = &app.workflows {

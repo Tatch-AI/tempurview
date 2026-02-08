@@ -4,11 +4,12 @@ use crate::config::Config;
 use crate::domain::{parse_date_input, run_insights_scan, WorkflowFilter};
 use crate::output::{self, OutputFormat};
 use std::io::Write;
+use std::sync::Arc;
 
 /// Handle insight commands, printing to stdout.
 pub async fn handle(
     action: InsightAction,
-    client: &dyn TemporalClient,
+    client: Arc<dyn TemporalClient>,
     format: OutputFormat,
     limit: u32,
     config: &Config,
@@ -27,7 +28,7 @@ pub async fn handle(
 /// Handle insight commands, writing output to the given writer.
 pub async fn handle_to(
     action: InsightAction,
-    client: &dyn TemporalClient,
+    client: Arc<dyn TemporalClient>,
     format: OutputFormat,
     limit: u32,
     config: &Config,
@@ -48,7 +49,7 @@ pub async fn handle_to(
             }
 
             let result =
-                run_insights_scan(client, &filter, limit, &config.insights).await?;
+                run_insights_scan(client, &filter, limit, &config.insights, None, 0).await?;
             output::write_output(&result, format, w);
         }
     }

@@ -1,9 +1,9 @@
 use crate::action::{Action, DataPayload, TableColumn};
 use crate::domain::{
     correlate_activities, correlate_child_workflows, highlight_search_matches, parse_date_input,
-    ActivityExecution, ChildWorkflowExecution, HistoryEvent, InsightsResult, SortDirection,
-    StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter, WorkflowStatus,
-    WorkflowSummary,
+    ActivityExecution, ChildWorkflowExecution, HistoryEvent, InsightsResult, InsightsScanPhase,
+    SortDirection, StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter,
+    WorkflowStatus, WorkflowSummary,
 };
 use ratatui::widgets::TableState;
 use std::collections::HashSet;
@@ -132,6 +132,13 @@ pub struct App {
     pub insights_table_state: TableState,
     pub insight_detail_scroll: u16,
     pub insight_entity_index: usize,
+    pub insights_progress: Option<InsightsScanPhase>,
+    pub insights_scanning: bool,
+    pub insights_scan_gen: u64,
+
+    // Streaming state
+    pub workflows_loading: bool,
+    pub workflows_load_gen: u64,
 
     // Config
     pub temporal_namespace: String,
@@ -206,6 +213,12 @@ impl App {
             insights_table_state: TableState::default().with_selected(0),
             insight_detail_scroll: 0,
             insight_entity_index: 0,
+            insights_progress: None,
+            insights_scanning: false,
+            insights_scan_gen: 0,
+
+            workflows_loading: false,
+            workflows_load_gen: 0,
 
             temporal_namespace: String::new(),
 
@@ -304,7 +317,7 @@ impl App {
                             }
                             self.filter.workflow_type = Some(name);
                             self.table_state.select(Some(0));
-                            vec![Effect::LoadWorkflows]
+                            vec![self.load_workflows_effect()]
                         } else {
                             vec![]
                         }
@@ -415,12 +428,12 @@ impl App {
             Action::SetStatusFilter(status) => {
                 self.filter.status = status;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                vec![self.load_workflows_effect()]
             }
             Action::SetTypeFilter(workflow_type) => {
                 self.filter.workflow_type = workflow_type;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                vec![self.load_workflows_effect()]
             }
             Action::NextStatusFilter => {
                 let statuses = WorkflowStatus::all();
@@ -434,7 +447,7 @@ impl App {
                 };
                 self.filter.status = next_status;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                vec![self.load_workflows_effect()]
             }
             Action::PrevStatusFilter => {
                 let statuses = WorkflowStatus::all();
@@ -452,7 +465,7 @@ impl App {
                 };
                 self.filter.status = prev_status;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                vec![self.load_workflows_effect()]
             }
             Action::ToggleColumn(column) => {
                 if self.visible_columns.contains(&column) {
@@ -470,7 +483,7 @@ impl App {
                 self.active_date_range_label = None;
                 self.type_name_filter = None;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                vec![self.load_workflows_effect()]
             }
             Action::OpenFilterInput => {
                 self.input_mode = InputMode::FilterInput;
@@ -494,7 +507,7 @@ impl App {
                     if !self.filter_input.is_empty() {
                         self.filter = WorkflowFilter::from_query(&self.filter_input);
                         self.filter_input.clear();
-                        vec![Effect::LoadWorkflows]
+                        vec![self.load_workflows_effect()]
                     } else {
                         vec![]
                     }
@@ -603,6 +616,8 @@ impl App {
                 if self.view == View::Insights || self.view == View::InsightDetail {
                     // Re-run the insights scan
                     self.insights = LoadState::Loading;
+                    self.insights_progress = None;
+                    self.insights_scanning = false;
                     self.insights_table_state.select(Some(0));
                     self.insight_detail_scroll = 0;
                     // If in detail view, go back to list
@@ -615,9 +630,14 @@ impl App {
                     }
                     return vec![self.load_insights_effect()];
                 }
-                let mut effects = vec![Effect::LoadCounts, Effect::LoadWorkflows];
+                let load_wf = self.load_workflows_effect();
+                let mut effects = vec![
+                    Effect::LoadCounts { filter: self.filter.clone() },
+                    load_wf,
+                ];
                 self.status_counts = LoadState::Loading;
                 self.workflows = LoadState::Loading;
+                self.workflows_loading = false;
                 if self.view == View::TypeList {
                     self.type_stats = LoadState::Loading;
                     effects.push(Effect::LoadTypeStats);
@@ -699,6 +719,8 @@ impl App {
                 self.view_stack.push(self.view);
                 self.view = View::Insights;
                 self.insights = LoadState::Loading;
+                self.insights_progress = None;
+                self.insights_scanning = false;
                 self.insights_table_state.select(Some(0));
                 vec![self.load_insights_effect()]
             }
@@ -1068,21 +1090,65 @@ impl App {
                     DataPayload::Counts(counts) => {
                         self.status_counts = LoadState::Loaded(counts);
                     }
-                    DataPayload::Workflows(wfs) => {
-                        // Only compute counts locally if we don't have API-loaded counts
-                        // API counts are more accurate as they include ALL workflows
-                        if !self.status_counts.is_loaded() {
-                            let counts = StatusCounts::from_workflows(&wfs);
-                            self.status_counts = LoadState::Loaded(counts);
+                    DataPayload::Workflows(wfs, gen) => {
+                        if gen != self.workflows_load_gen {
+                            // Stale result from old load — drop
+                        } else {
+                            if !self.status_counts.is_loaded() {
+                                let counts = StatusCounts::from_workflows(&wfs);
+                                self.status_counts = LoadState::Loaded(counts);
+                            }
+                            self.workflows = LoadState::Loaded(wfs);
+                            self.workflows_loading = false;
+                            self.sort_workflows();
+                            if self.search_query.is_some() {
+                                self.recompute_list_search();
+                            }
+                            if let LoadState::Loaded(ref workflows) = self.workflows {
+                                let selected = self.table_state.selected().unwrap_or(0);
+                                if selected >= workflows.len() && !workflows.is_empty() {
+                                    self.table_state.select(Some(workflows.len() - 1));
+                                }
+                            }
                         }
-
-                        self.workflows = LoadState::Loaded(wfs);
-                        self.sort_workflows();
-                        // Reset selection if it's out of bounds
-                        if let LoadState::Loaded(ref workflows) = self.workflows {
-                            let selected = self.table_state.selected().unwrap_or(0);
-                            if selected >= workflows.len() && !workflows.is_empty() {
-                                self.table_state.select(Some(workflows.len() - 1));
+                    }
+                    DataPayload::WorkflowsPage(page, gen) => {
+                        if gen != self.workflows_load_gen {
+                            // Stale page from old load — drop
+                        } else {
+                            match &mut self.workflows {
+                                LoadState::Loading => {
+                                    self.workflows = LoadState::Loaded(page);
+                                    self.workflows_loading = true;
+                                    self.table_state.select(Some(0));
+                                }
+                                LoadState::Loaded(wfs) if self.workflows_loading => {
+                                    wfs.extend(page);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    DataPayload::WorkflowsDone(gen) => {
+                        if gen != self.workflows_load_gen {
+                            // Stale done from old load — drop
+                        } else {
+                            self.workflows_loading = false;
+                            self.sort_workflows();
+                            if self.search_query.is_some() {
+                                self.recompute_list_search();
+                            }
+                            if !self.status_counts.is_loaded() {
+                                if let LoadState::Loaded(ref wfs) = self.workflows {
+                                    let counts = StatusCounts::from_workflows(wfs);
+                                    self.status_counts = LoadState::Loaded(counts);
+                                }
+                            }
+                            if let LoadState::Loaded(ref wfs) = self.workflows {
+                                let selected = self.table_state.selected().unwrap_or(0);
+                                if selected >= wfs.len() && !wfs.is_empty() {
+                                    self.table_state.select(Some(wfs.len() - 1));
+                                }
                             }
                         }
                     }
@@ -1092,6 +1158,10 @@ impl App {
                     DataPayload::TypeStats(stats) => {
                         self.type_stats = LoadState::Loaded(stats);
                         self.sort_type_stats();
+                        // Recompute search filter against fresh data
+                        if self.search_query.is_some() {
+                            self.recompute_list_search();
+                        }
                         // Reset selection if out of bounds
                         if let LoadState::Loaded(ref ts) = self.type_stats {
                             let selected = self.type_table_state.selected().unwrap_or(0);
@@ -1104,6 +1174,10 @@ impl App {
                         self.activities = correlate_activities(&events);
                         self.child_workflows = correlate_child_workflows(&events);
                         self.activity_events = LoadState::Loaded(events);
+                        // Recompute search filter against fresh data
+                        if self.search_query.is_some() {
+                            self.recompute_list_search();
+                        }
                         // Reset selection if out of bounds (combined length for timeline)
                         let combined_len =
                             self.activities.len() + self.child_workflows.len();
@@ -1122,15 +1196,42 @@ impl App {
                             }
                         }
                     }
-                    DataPayload::Insights(result) => {
-                        self.insights = LoadState::Loaded(result);
-                        // Reset selection if out of bounds
-                        if let LoadState::Loaded(ref r) = self.insights {
-                            let selected = self.insights_table_state.selected().unwrap_or(0);
-                            if selected >= r.findings.len() && !r.findings.is_empty() {
-                                self.insights_table_state
-                                    .select(Some(r.findings.len() - 1));
+                    DataPayload::Insights(result, gen) => {
+                        if gen != self.insights_scan_gen {
+                            // Stale result from old scan — drop it
+                        } else {
+                            self.insights_progress = None;
+                            self.insights_scanning = false;
+                            self.insights = LoadState::Loaded(result);
+                            // Recompute search filter against fresh data
+                            if self.search_query.is_some() {
+                                self.recompute_list_search();
                             }
+                            // Reset selection if out of bounds
+                            if let LoadState::Loaded(ref r) = self.insights {
+                                let selected = self.insights_table_state.selected().unwrap_or(0);
+                                if selected >= r.findings.len() && !r.findings.is_empty() {
+                                    self.insights_table_state
+                                        .select(Some(r.findings.len() - 1));
+                                }
+                            }
+                        }
+                    }
+                    DataPayload::InsightsPartial(result, gen) => {
+                        if gen != self.insights_scan_gen {
+                            // Stale partial from old scan — drop it
+                        } else {
+                            self.insights = LoadState::Loaded(result);
+                            self.insights_scanning = true;
+                            self.insights_table_state.select(Some(0));
+                            if self.search_query.is_some() {
+                                self.recompute_list_search();
+                            }
+                        }
+                    }
+                    DataPayload::InsightsProgress(phase, gen) => {
+                        if gen == self.insights_scan_gen {
+                            self.insights_progress = Some(phase);
                         }
                     }
                 }
@@ -1151,8 +1252,12 @@ impl App {
                 if self.activity_events.is_loading() {
                     self.activity_events = LoadState::Error(msg.clone());
                 }
-                if self.insights.is_loading() {
-                    self.insights = LoadState::Error(msg);
+                if self.insights.is_loading() || self.insights_scanning {
+                    self.insights_scanning = false;
+                    if self.insights.is_loading() {
+                        self.insights = LoadState::Error(msg);
+                    }
+                    // If we have partial results, keep them visible
                 }
                 vec![]
             }
@@ -1173,25 +1278,42 @@ impl App {
         }
     }
 
-    /// Build a LoadInsights effect using the current filter state
-    fn load_insights_effect(&self) -> Effect {
-        let limit = if self.filter.has_date_range() {
-            1000
-        } else {
-            500
-        };
-        Effect::LoadInsights {
-            filter: self.filter.clone(),
-            limit,
+    /// Build a LoadWorkflows effect, incrementing the gen counter to invalidate stale streams.
+    fn load_workflows_effect(&mut self) -> Effect {
+        self.workflows_load_gen += 1;
+        Effect::LoadWorkflows {
+            gen: self.workflows_load_gen,
         }
     }
 
-    /// Return the appropriate reload effects based on the current view
-    fn date_range_reload_effects(&self) -> Vec<Effect> {
-        if self.view == View::TypeList {
-            vec![Effect::LoadTypeStats]
+    /// Build a LoadInsights effect using the current filter state.
+    /// Increments the scan generation counter to invalidate stale results.
+    fn load_insights_effect(&mut self) -> Effect {
+        self.insights_scan_gen += 1;
+        Effect::LoadInsights {
+            filter: self.filter.clone(),
+            limit: u32::MAX,
+            gen: self.insights_scan_gen,
+        }
+    }
+
+    /// Return the appropriate reload effects based on the current view.
+    /// Also reloads counts so the status dashboard matches the date range.
+    fn date_range_reload_effects(&mut self) -> Vec<Effect> {
+        let load_counts = Effect::LoadCounts { filter: self.filter.clone() };
+        if self.view == View::Insights {
+            self.insights = LoadState::Loading;
+            self.insights_progress = None;
+            self.insights_scanning = false;
+            self.insights_table_state.select(Some(0));
+            vec![self.load_insights_effect()]
+        } else if self.view == View::TypeList {
+            self.status_counts = LoadState::Loading;
+            vec![load_counts, Effect::LoadTypeStats]
         } else {
-            vec![Effect::LoadWorkflows]
+            self.status_counts = LoadState::Loading;
+            let load_wf = self.load_workflows_effect();
+            vec![load_counts, load_wf]
         }
     }
 
@@ -1305,7 +1427,7 @@ impl App {
         if let LoadState::Loaded(ref stats) = self.type_stats {
             let selected = self.type_table_state.selected().unwrap_or(0);
             let data_index = self.translate_selection(selected);
-            stats.get(data_index).map(|ts| ts.workflow_type.as_str())
+            stats.get(data_index).map(|ts| &*ts.workflow_type)
         } else {
             None
         }
@@ -1644,14 +1766,19 @@ impl App {
 /// Side effects to be performed after state update
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    LoadCounts,
-    LoadWorkflows,
+    LoadCounts {
+        filter: WorkflowFilter,
+    },
+    LoadWorkflows {
+        gen: u64,
+    },
     LoadWorkflowDetail(String, Option<String>),
     LoadTypeStats,
     LoadHistory(String, Option<String>),
     LoadInsights {
         filter: WorkflowFilter,
         limit: u32,
+        gen: u64,
     },
     CancelWorkflow(String),
     TerminateWorkflow(String),
@@ -1666,33 +1793,34 @@ mod tests {
     use chrono::Utc;
 
     fn make_test_workflows() -> Vec<WorkflowSummary> {
+        use std::sync::Arc;
         vec![
             WorkflowSummary {
                 workflow_id: "wf-1".to_string(),
                 run_id: "run-1".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Running,
                 start_time: Utc::now(),
                 close_time: None,
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
             WorkflowSummary {
                 workflow_id: "wf-2".to_string(),
                 run_id: "run-2".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Completed,
                 start_time: Utc::now(),
                 close_time: Some(Utc::now()),
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
             WorkflowSummary {
                 workflow_id: "wf-3".to_string(),
                 run_id: "run-3".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Failed,
                 start_time: Utc::now(),
                 close_time: Some(Utc::now()),
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
         ]
     }
@@ -1734,8 +1862,8 @@ mod tests {
         assert!(matches!(app.workflows, LoadState::Loading));
         // LoadCounts loads counts for all statuses from API
         // LoadWorkflows loads the filtered workflow list
-        assert!(effects.contains(&Effect::LoadCounts));
-        assert!(effects.contains(&Effect::LoadWorkflows));
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadCounts { .. })));
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadWorkflows { .. })));
     }
 
     #[test]
@@ -1794,7 +1922,7 @@ mod tests {
         let effects = app.update(Action::SetStatusFilter(Some(WorkflowStatus::Failed)));
 
         assert_eq!(app.filter.status, Some(WorkflowStatus::Failed));
-        assert!(effects.contains(&Effect::LoadWorkflows));
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadWorkflows { .. })));
     }
 
     #[test]
@@ -1806,7 +1934,7 @@ mod tests {
         let effects = app.update(Action::ClearFilters);
 
         assert!(app.filter.is_empty());
-        assert!(effects.contains(&Effect::LoadWorkflows));
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadWorkflows { .. })));
     }
 
     #[test]

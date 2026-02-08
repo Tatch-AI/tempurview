@@ -1,6 +1,6 @@
 use crate::domain::{
-    DateRangePreset, HistoryEvent, InsightsResult, StatusCounts, TypeStat, WorkflowDetail,
-    WorkflowStatus, WorkflowSummary,
+    DateRangePreset, HistoryEvent, InsightsResult, InsightsScanPhase, StatusCounts, TypeStat,
+    WorkflowDetail, WorkflowStatus, WorkflowSummary,
 };
 
 /// Table columns that can be toggled
@@ -197,9 +197,13 @@ impl Eq for Action {}
 #[derive(Debug, Clone)]
 pub enum DataPayload {
     Counts(StatusCounts),
-    Workflows(Vec<WorkflowSummary>),
+    Workflows(Vec<WorkflowSummary>, u64),
+    WorkflowsPage(Vec<WorkflowSummary>, u64),
+    WorkflowsDone(u64),
     Detail(Box<WorkflowDetail>),
     TypeStats(Vec<TypeStat>),
     History(Vec<HistoryEvent>),
-    Insights(InsightsResult),
+    Insights(InsightsResult, u64),
+    InsightsPartial(InsightsResult, u64),
+    InsightsProgress(InsightsScanPhase, u64),
 }

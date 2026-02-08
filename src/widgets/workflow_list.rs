@@ -17,7 +17,9 @@ pub struct WorkflowTableWidget<'a> {
     visible_columns: &'a HashSet<TableColumn>,
     sort: &'a Option<(TableColumn, SortDirection)>,
     date_label: Option<&'a str>,
-    search_query: Option<&'a str>,
+    filtered_indices: Option<&'a [usize]>,
+    loading: bool,
+    total_count: Option<u64>,
 }
 
 impl<'a> WorkflowTableWidget<'a> {
@@ -33,7 +35,9 @@ impl<'a> WorkflowTableWidget<'a> {
             visible_columns,
             sort,
             date_label: None,
-            search_query: None,
+            filtered_indices: None,
+            loading: false,
+            total_count: None,
         }
     }
 
@@ -42,17 +46,33 @@ impl<'a> WorkflowTableWidget<'a> {
         self
     }
 
-    pub fn search_query(mut self, query: Option<&'a str>) -> Self {
-        self.search_query = query;
+    pub fn filtered_indices(mut self, indices: Option<&'a [usize]>) -> Self {
+        self.filtered_indices = indices;
         self
     }
 
-    fn build_title(&self) -> String {
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
+    pub fn total_count(mut self, count: Option<u64>) -> Self {
+        self.total_count = count;
+        self
+    }
+
+    fn build_title(&self, total_len: usize) -> String {
         let filter_desc = self.filter.description_with_date_label(self.date_label);
-        if let LoadState::Loaded(wfs) = self.workflows {
-            format!("Workflows ({}) - {}", wfs.len(), filter_desc)
+        if self.loading {
+            match self.total_count {
+                Some(count) => format!(
+                    "Workflows ({} / {} loading...) - {}",
+                    total_len, count, filter_desc
+                ),
+                None => format!("Workflows ({} loading...) - {}", total_len, filter_desc),
+            }
         } else {
-            format!("Workflows - {}", filter_desc)
+            format!("Workflows ({}) - {}", total_len, filter_desc)
         }
     }
 
@@ -67,6 +87,8 @@ impl<'a> WorkflowTableWidget<'a> {
 
     fn build_header(&self) -> Row<'static> {
         let mut cells = Vec::new();
+
+        cells.push(Cell::from("#").style(Style::default().bold()));
 
         if self.visible_columns.contains(&TableColumn::Status) {
             let ind = self.sort_indicator_for(TableColumn::Status);
@@ -93,6 +115,8 @@ impl<'a> WorkflowTableWidget<'a> {
     fn build_widths(&self) -> Vec<Constraint> {
         let mut widths = Vec::new();
 
+        widths.push(Constraint::Length(6));
+
         if self.visible_columns.contains(&TableColumn::Status) {
             widths.push(Constraint::Length(8));
         }
@@ -109,8 +133,13 @@ impl<'a> WorkflowTableWidget<'a> {
         widths
     }
 
-    fn workflow_to_row(&self, wf: &WorkflowSummary) -> Row<'static> {
+    fn workflow_to_row(&self, idx: usize, wf: &WorkflowSummary) -> Row<'static> {
         let mut cells = Vec::new();
+
+        cells.push(
+            Cell::from(format!("{}", idx + 1))
+                .style(Style::default().add_modifier(Modifier::DIM)),
+        );
 
         if self.visible_columns.contains(&TableColumn::Status) {
             cells.push(
@@ -144,27 +173,13 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         match self.workflows {
             LoadState::Loaded(workflows) => {
-                // Apply client-side search filter
-                let filtered: Vec<&WorkflowSummary> =
-                    if let Some(query) = self.search_query.filter(|q| !q.is_empty()) {
-                        let lower = query.to_lowercase();
-                        workflows
-                            .iter()
-                            .filter(|wf| {
-                                format!(
-                                    "{} {} {} {}",
-                                    wf.workflow_id, wf.workflow_type, wf.status, wf.task_queue
-                                )
-                                .to_lowercase()
-                                .contains(&lower)
-                            })
-                            .collect()
-                    } else {
-                        workflows.iter().collect()
-                    };
+                let total_len = match self.filtered_indices {
+                    Some(indices) => indices.len(),
+                    None => workflows.len(),
+                };
 
-                if filtered.is_empty() {
-                    let msg = if self.search_query.is_some() {
+                if total_len == 0 {
+                    let msg = if self.filtered_indices.is_some() {
                         "No matching workflows"
                     } else {
                         "No workflows found"
@@ -174,7 +189,7 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
                         .block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .title(self.build_title()),
+                                .title(self.build_title(total_len)),
                         );
                     empty.render(area, buf);
                     return;
@@ -183,9 +198,33 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
                 let header = self.build_header();
                 let widths = self.build_widths();
 
-                let rows: Vec<Row> = filtered
-                    .iter()
-                    .map(|wf| self.workflow_to_row(wf))
+                // Compute visible window for virtual viewport rendering
+                // borders(2) + header(1) + header bottom_margin(1) = 4
+                let viewport_height = area.height.saturating_sub(4) as usize;
+                let offset = state.offset();
+                let selected = state.selected().unwrap_or(0);
+
+                // Adjust offset to keep selected visible
+                let adjusted_offset = if selected < offset {
+                    selected
+                } else if viewport_height > 0 && selected >= offset + viewport_height {
+                    selected.saturating_sub(viewport_height - 1)
+                } else {
+                    offset
+                };
+                *state.offset_mut() = adjusted_offset;
+
+                let end = (adjusted_offset + viewport_height).min(total_len);
+
+                // Build ONLY visible rows
+                let rows: Vec<Row> = (adjusted_offset..end)
+                    .map(|visible_idx| {
+                        let data_idx = match self.filtered_indices {
+                            Some(indices) => indices[visible_idx],
+                            None => visible_idx,
+                        };
+                        self.workflow_to_row(visible_idx, &workflows[data_idx])
+                    })
                     .collect();
 
                 let table = Table::new(rows, widths)
@@ -193,7 +232,7 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(self.build_title()),
+                            .title(self.build_title(total_len)),
                     )
                     .row_highlight_style(
                         Style::default()
@@ -202,7 +241,12 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
                     )
                     .highlight_symbol("▶ ");
 
-                StatefulWidget::render(table, area, buf, state);
+                // Render with local state (selected relative to window)
+                let mut local_state = TableState::default();
+                if selected >= adjusted_offset && selected < end {
+                    local_state.select(Some(selected - adjusted_offset));
+                }
+                StatefulWidget::render(table, area, buf, &mut local_state);
             }
             LoadState::Loading => {
                 let loading = Paragraph::new("Loading workflows...")
@@ -210,7 +254,7 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(self.build_title()),
+                            .title("Workflows"),
                     );
                 loading.render(area, buf);
             }
@@ -220,7 +264,7 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(self.build_title()),
+                            .title("Workflows"),
                     );
                 error.render(area, buf);
             }
@@ -230,7 +274,7 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(self.build_title()),
+                            .title("Workflows"),
                     );
                 empty.render(area, buf);
             }

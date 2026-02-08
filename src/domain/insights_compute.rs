@@ -15,7 +15,7 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
     // Group workflows by type
     let mut by_type: HashMap<&str, Vec<&WorkflowSummary>> = HashMap::new();
     for wf in workflows {
-        by_type.entry(wf.workflow_type.as_str()).or_default().push(wf);
+        by_type.entry(&*wf.workflow_type).or_default().push(wf);
     }
 
     let failed_statuses = [
@@ -103,7 +103,7 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
             let elapsed_hours = elapsed.num_hours();
             if elapsed_hours >= InsightThresholds::STUCK_WARNING_HOURS {
                 stuck_by_type
-                    .entry(wf.workflow_type.as_str())
+                    .entry(&*wf.workflow_type)
                     .or_default()
                     .push((wf, elapsed_hours));
             }
@@ -929,6 +929,214 @@ pub fn compute_scheduling_overhead_findings(
     findings
 }
 
+/// Accumulator for event-level statistics from one workflow's history.
+/// Used by the streaming insights scan to avoid holding all events in memory.
+#[derive(Debug)]
+pub struct WorkflowEventStats {
+    pub workflow_id: String,
+    pub signal_count: usize,
+    pub workflow_type: String,
+    pub decision_latencies_ms: Vec<i64>,
+    pub scheduling_overheads: HashMap<String, Vec<i64>>,
+    // Intermediate state for matching scheduled→completed/started pairs
+    scheduled_task_times: HashMap<i64, chrono::DateTime<Utc>>,
+    scheduled_activity_info: HashMap<i64, (chrono::DateTime<Utc>, String)>,
+}
+
+impl WorkflowEventStats {
+    pub fn new(workflow_id: String) -> Self {
+        Self {
+            workflow_id,
+            signal_count: 0,
+            workflow_type: "Unknown".to_string(),
+            decision_latencies_ms: Vec::new(),
+            scheduling_overheads: HashMap::new(),
+            scheduled_task_times: HashMap::new(),
+            scheduled_activity_info: HashMap::new(),
+        }
+    }
+
+    /// Process a single history event, extracting statistics.
+    pub fn accumulate(&mut self, event: &HistoryEvent) {
+        match event.event_type.as_str() {
+            "WorkflowExecutionStarted" => {
+                if let Some(wf_type) = event.details.get("workflowType").and_then(|v| v.as_str()) {
+                    self.workflow_type = wf_type.to_string();
+                }
+            }
+            "WorkflowExecutionSignaled" => {
+                self.signal_count += 1;
+            }
+            "WorkflowTaskScheduled" => {
+                self.scheduled_task_times.insert(event.event_id, event.timestamp);
+            }
+            "WorkflowTaskCompleted" => {
+                let scheduled_id = event
+                    .details
+                    .get("scheduled_event_id")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(event.event_id - 2);
+                if let Some(scheduled_ts) = self.scheduled_task_times.get(&scheduled_id) {
+                    let delta_ms = (event.timestamp - *scheduled_ts).num_milliseconds();
+                    if delta_ms >= 0 {
+                        self.decision_latencies_ms.push(delta_ms);
+                    }
+                }
+            }
+            "ActivityTaskScheduled" => {
+                let task_queue = event
+                    .details
+                    .get("task_queue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                self.scheduled_activity_info.insert(event.event_id, (event.timestamp, task_queue));
+            }
+            "ActivityTaskStarted" => {
+                if let Some(sched_id) = event.details.get("scheduled_event_id").and_then(|v| v.as_i64()) {
+                    if let Some((sched_ts, ref queue)) = self.scheduled_activity_info.get(&sched_id) {
+                        let delta_ms = (event.timestamp - *sched_ts).num_milliseconds();
+                        if delta_ms >= 0 {
+                            self.scheduling_overheads
+                                .entry(queue.clone())
+                                .or_default()
+                                .push(delta_ms);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Finalize signal storm findings from accumulated event stats.
+pub fn finalize_signal_findings(stats: &[WorkflowEventStats]) -> Vec<InsightFinding> {
+    let mut findings = Vec::new();
+    let now = Utc::now();
+
+    for s in stats {
+        let severity = if s.signal_count >= InsightThresholds::SIGNAL_STORM_CRITICAL {
+            Some(InsightSeverity::Critical)
+        } else if s.signal_count >= InsightThresholds::SIGNAL_STORM_WARNING {
+            Some(InsightSeverity::Warning)
+        } else {
+            None
+        };
+        if let Some(severity) = severity {
+            findings.push(InsightFinding {
+                severity,
+                category: InsightCategory::SignalStorm,
+                title: format!("{}: {} signals received", s.workflow_id, s.signal_count),
+                detail: format!(
+                    "Workflow received {} signals. Excessive signaling may indicate a producer bug or infinite signal loop.",
+                    s.signal_count
+                ),
+                affected_entities: vec![s.workflow_id.clone()],
+                computed_at: now,
+                trigger_terms: vec![s.workflow_id.clone(), format!("{} signals", s.signal_count)],
+            });
+        }
+    }
+    findings
+}
+
+/// Finalize decision latency findings from accumulated event stats.
+pub fn finalize_decision_latency_findings(stats: &[WorkflowEventStats]) -> Vec<InsightFinding> {
+    let mut findings = Vec::new();
+    let now = Utc::now();
+
+    let mut latencies_by_type: HashMap<String, Vec<i64>> = HashMap::new();
+    for s in stats {
+        latencies_by_type
+            .entry(s.workflow_type.clone())
+            .or_default()
+            .extend(&s.decision_latencies_ms);
+    }
+
+    for (wf_type, mut latencies) in latencies_by_type {
+        if latencies.is_empty() {
+            continue;
+        }
+        latencies.sort();
+        let median = latencies[latencies.len() / 2];
+
+        let severity = if median >= InsightThresholds::DECISION_LATENCY_CRITICAL_MS {
+            Some(InsightSeverity::Critical)
+        } else if median >= InsightThresholds::DECISION_LATENCY_WARNING_MS {
+            Some(InsightSeverity::Warning)
+        } else {
+            None
+        };
+
+        if let Some(severity) = severity {
+            let median_secs = median as f64 / 1000.0;
+            findings.push(InsightFinding {
+                severity,
+                category: InsightCategory::DecisionLatency,
+                title: format!("{}: {:.1}s median decision latency", wf_type, median_secs),
+                detail: format!(
+                    "Measured across {} workflow task pairs. High decision latency indicates heavy workflow logic, large payloads, or overloaded workers.",
+                    latencies.len()
+                ),
+                affected_entities: vec![wf_type.clone()],
+                computed_at: now,
+                trigger_terms: vec![wf_type, format!("{:.1}s", median_secs)],
+            });
+        }
+    }
+    findings
+}
+
+/// Finalize scheduling overhead findings from accumulated event stats.
+pub fn finalize_scheduling_overhead_findings(stats: &[WorkflowEventStats]) -> Vec<InsightFinding> {
+    let mut findings = Vec::new();
+    let now = Utc::now();
+
+    let mut overheads_by_queue: HashMap<String, Vec<i64>> = HashMap::new();
+    for s in stats {
+        for (queue, overheads) in &s.scheduling_overheads {
+            overheads_by_queue
+                .entry(queue.clone())
+                .or_default()
+                .extend(overheads);
+        }
+    }
+
+    for (queue, mut overheads) in overheads_by_queue {
+        if overheads.is_empty() {
+            continue;
+        }
+        overheads.sort();
+        let median = overheads[overheads.len() / 2];
+
+        let severity = if median >= InsightThresholds::SCHEDULING_OVERHEAD_CRITICAL_MS {
+            Some(InsightSeverity::Critical)
+        } else if median >= InsightThresholds::SCHEDULING_OVERHEAD_WARNING_MS {
+            Some(InsightSeverity::Warning)
+        } else {
+            None
+        };
+
+        if let Some(severity) = severity {
+            let median_secs = median as f64 / 1000.0;
+            findings.push(InsightFinding {
+                severity,
+                category: InsightCategory::SchedulingOverhead,
+                title: format!("'{}': {:.1}s median scheduling overhead", queue, median_secs),
+                detail: format!(
+                    "Measured across {} scheduled→started pairs. High overhead indicates task queue starvation or insufficient workers.",
+                    overheads.len()
+                ),
+                affected_entities: vec![queue.clone()],
+                computed_at: now,
+                trigger_terms: vec![queue, format!("{:.1}s", median_secs)],
+            });
+        }
+    }
+    findings
+}
+
 /// Extract a snippet around a pattern match in a string with generous context
 fn extract_snippet(text: &str, pattern: &str) -> String {
     let lower = text.to_lowercase();
@@ -1035,11 +1243,11 @@ mod tests {
         WorkflowSummary {
             workflow_id: id.to_string(),
             run_id: format!("run-{}", id),
-            workflow_type: wf_type.to_string(),
+            workflow_type: std::sync::Arc::from(wf_type),
             status,
             start_time,
             close_time,
-            task_queue: "default".to_string(),
+            task_queue: std::sync::Arc::from("default"),
         }
     }
 
@@ -1610,6 +1818,7 @@ mod tests {
 
         let config = InsightsConfig {
             allowlist: vec!["errors and omissions".to_string()],
+            ..InsightsConfig::default()
         };
 
         let findings = compute_activity_findings(&samples, &config);

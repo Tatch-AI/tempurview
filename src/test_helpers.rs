@@ -6,6 +6,7 @@ use crate::app::{App, LoadState};
 use crate::domain::{FailureInfo, StatusCounts, WorkflowDetail, WorkflowStatus, WorkflowSummary};
 use chrono::{Duration, Utc};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Create a test workflow summary with the given status
 pub fn make_workflow(status: WorkflowStatus) -> WorkflowSummary {
@@ -20,7 +21,7 @@ pub fn make_workflow_with_type(status: WorkflowStatus, workflow_type: &str) -> W
     WorkflowSummary {
         workflow_id: format!("test-workflow-{}", id),
         run_id: format!("run-{}", id),
-        workflow_type: workflow_type.to_string(),
+        workflow_type: Arc::from(workflow_type),
         status,
         start_time: Utc::now() - Duration::minutes(id as i64),
         close_time: if status == WorkflowStatus::Running {
@@ -28,7 +29,7 @@ pub fn make_workflow_with_type(status: WorkflowStatus, workflow_type: &str) -> W
         } else {
             Some(Utc::now())
         },
-        task_queue: "test-queue".to_string(),
+        task_queue: Arc::from("test-queue"),
     }
 }
 

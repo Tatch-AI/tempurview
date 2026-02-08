@@ -1,6 +1,7 @@
 use super::{WorkflowStatus, WorkflowSummary};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Sort direction for table columns
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,14 +37,14 @@ pub enum TypeListColumn {
 /// Per-type workflow statistics with status breakdown
 #[derive(Debug, Clone, Serialize)]
 pub struct TypeStat {
-    pub workflow_type: String,
+    pub workflow_type: Arc<str>,
     pub total: u64,
     pub by_status: HashMap<WorkflowStatus, u64>,
 }
 
 impl TypeStat {
     pub fn from_workflows(workflows: &[WorkflowSummary]) -> Vec<TypeStat> {
-        let mut map: HashMap<String, HashMap<WorkflowStatus, u64>> = HashMap::new();
+        let mut map: HashMap<Arc<str>, HashMap<WorkflowStatus, u64>> = HashMap::new();
         for wf in workflows {
             let entry = map.entry(wf.workflow_type.clone()).or_default();
             *entry.entry(wf.status).or_insert(0) += 1;
@@ -122,7 +123,7 @@ impl StatusCounts {
 /// Workflow type distribution
 #[derive(Debug, Clone, Default)]
 pub struct TypeDistribution {
-    counts: HashMap<String, u64>,
+    counts: HashMap<Arc<str>, u64>,
 }
 
 impl TypeDistribution {
@@ -140,7 +141,7 @@ impl TypeDistribution {
     }
 
     pub fn top_n(&self, n: usize) -> Vec<(&str, u64)> {
-        let mut items: Vec<_> = self.counts.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let mut items: Vec<_> = self.counts.iter().map(|(k, v)| (&**k, *v)).collect();
         items.sort_by(|a, b| b.1.cmp(&a.1));
         items.truncate(n);
         items
@@ -160,11 +161,11 @@ mod tests {
         WorkflowSummary {
             workflow_id: "test".to_string(),
             run_id: "run".to_string(),
-            workflow_type: workflow_type.to_string(),
+            workflow_type: Arc::from(workflow_type),
             status,
             start_time: Utc::now(),
             close_time: None,
-            task_queue: "default".to_string(),
+            task_queue: Arc::from("default"),
         }
     }
 

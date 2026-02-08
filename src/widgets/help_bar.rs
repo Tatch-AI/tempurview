@@ -103,6 +103,7 @@ impl HelpBar {
                 ("/", "Search"),
                 ("n/N", "Next/Prev"),
                 ("Esc", "Back"),
+                ("d", "Date Range"),
                 ("r", "Re-scan"),
                 ("?", "Help"),
             ],
