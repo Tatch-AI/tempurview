@@ -1,9 +1,9 @@
 use crate::action::{Action, DataPayload, TableColumn};
 use crate::domain::{
-    correlate_activities, correlate_child_workflows, highlight_search_matches, json_to_lines,
-    parse_date_input, ActivityExecution, ChildWorkflowExecution, HistoryEvent, InsightsResult,
-    SortDirection, StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter,
-    WorkflowStatus, WorkflowSummary,
+    correlate_activities, correlate_child_workflows, highlight_search_matches, parse_date_input,
+    ActivityExecution, ChildWorkflowExecution, HistoryEvent, InsightsResult, SortDirection,
+    StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter, WorkflowStatus,
+    WorkflowSummary,
 };
 use ratatui::widgets::TableState;
 use std::collections::HashSet;
@@ -119,11 +119,13 @@ pub struct App {
     // EventDetail state
     pub event_detail_scroll: u16,
 
-    // Search state (for detail views)
+    // Search state (for all views)
     pub search_input: String,
     pub search_query: Option<String>,
     pub search_match_lines: Vec<usize>,
     pub search_current_match: usize,
+    /// For list views: indices of rows matching the search query
+    pub search_filtered_indices: Vec<usize>,
 
     // Insights state
     pub insights: LoadState<InsightsResult>,
@@ -198,6 +200,7 @@ impl App {
             search_query: None,
             search_match_lines: Vec::new(),
             search_current_match: 0,
+            search_filtered_indices: Vec::new(),
 
             insights: LoadState::NotLoaded,
             insights_table_state: TableState::default().with_selected(0),
@@ -322,6 +325,7 @@ impl App {
                                     self.view_stack.push(self.view);
                                     self.view = View::WorkflowDetail;
                                     self.selected_workflow = Some(LoadState::Loading);
+                                    self.clear_search_state();
                                     return vec![Effect::LoadWorkflowDetail(id, None)];
                                 }
                             }
@@ -336,6 +340,7 @@ impl App {
                             self.view_stack.push(self.view);
                             self.view = View::WorkflowDetail;
                             self.selected_workflow = Some(LoadState::Loading);
+                            self.clear_search_state();
                             vec![Effect::LoadWorkflowDetail(id, run_id)]
                         } else {
                             vec![]
@@ -359,34 +364,31 @@ impl App {
                 } else if self.input_mode == InputMode::FilterInput {
                     self.input_mode = InputMode::Normal;
                     self.filter_input.clear();
-                } else if self.view == View::ActivityDetail {
-                    // First Esc clears search, second Esc goes back
+                } else if matches!(
+                    self.view,
+                    View::ActivityDetail
+                        | View::EventDetail
+                        | View::WorkflowDetail
+                        | View::InsightDetail
+                ) {
+                    // Detail views: first Esc clears search, second goes back
                     if self.search_query.is_some() {
                         self.search_query = None;
                         self.search_match_lines.clear();
                         self.search_current_match = 0;
                     } else if let Some(prev_view) = self.view_stack.pop() {
-                        self.activity_detail_scroll = 0;
-                        self.search_input.clear();
-                        self.search_query = None;
-                        self.search_match_lines.clear();
-                        self.search_current_match = 0;
+                        self.clear_search_state();
+                        match self.view {
+                            View::ActivityDetail => self.activity_detail_scroll = 0,
+                            View::EventDetail => self.event_detail_scroll = 0,
+                            View::InsightDetail => self.insight_detail_scroll = 0,
+                            _ => {}
+                        }
                         self.view = prev_view;
                     }
-                } else if self.view == View::EventDetail {
-                    // First Esc clears search, second Esc goes back
-                    if self.search_query.is_some() {
-                        self.search_query = None;
-                        self.search_match_lines.clear();
-                        self.search_current_match = 0;
-                    } else if let Some(prev_view) = self.view_stack.pop() {
-                        self.event_detail_scroll = 0;
-                        self.search_input.clear();
-                        self.search_query = None;
-                        self.search_match_lines.clear();
-                        self.search_current_match = 0;
-                        self.view = prev_view;
-                    }
+                } else if self.search_query.is_some() {
+                    // List views: first Esc clears search
+                    self.clear_search_state();
                 } else if let Some(prev_view) = self.view_stack.pop() {
                     if self.view == View::ActivityList {
                         self.activity_events = LoadState::NotLoaded;
@@ -404,6 +406,7 @@ impl App {
                     }
                     self.view = prev_view;
                 } else if self.view == View::WorkflowDetail {
+                    self.clear_search_state();
                     self.view = View::WorkflowList;
                     self.selected_workflow = None;
                 }
@@ -705,6 +708,7 @@ impl App {
                             self.view = View::InsightDetail;
                             self.insight_detail_scroll = 0;
                             self.insight_entity_index = 0;
+                            self.clear_search_state();
                         }
                     }
                 }
@@ -788,21 +792,34 @@ impl App {
                 self.input_mode = InputMode::Normal;
                 if !self.search_input.is_empty() {
                     self.search_query = Some(self.search_input.clone());
-                    self.recompute_search_matches();
-                    // Scroll to first match
-                    if !self.search_match_lines.is_empty() {
-                        self.search_current_match = 0;
-                        let scroll_target = self.search_match_lines[0] as u16;
-                        if self.view == View::ActivityDetail {
-                            self.activity_detail_scroll = scroll_target;
-                        } else {
-                            self.event_detail_scroll = scroll_target;
+                    if self.is_detail_view() {
+                        self.recompute_search_matches();
+                        // Scroll to first match
+                        if !self.search_match_lines.is_empty() {
+                            self.search_current_match = 0;
+                            let scroll_target = self.search_match_lines[0] as u16;
+                            match self.view {
+                                View::ActivityDetail => {
+                                    self.activity_detail_scroll = scroll_target
+                                }
+                                View::EventDetail => self.event_detail_scroll = scroll_target,
+                                View::InsightDetail => {
+                                    self.insight_detail_scroll = scroll_target
+                                }
+                                _ => {} // WorkflowDetail has no single scroll offset
+                            }
+                        }
+                    } else {
+                        // List view: compute matching row indices
+                        self.recompute_list_search();
+                        if !self.search_filtered_indices.is_empty() {
+                            self.search_current_match = 0;
+                            let first = self.search_filtered_indices[0];
+                            self.current_table_state_mut().select(Some(first));
                         }
                     }
                 } else {
-                    self.search_query = None;
-                    self.search_match_lines.clear();
-                    self.search_current_match = 0;
+                    self.clear_search_state();
                 }
                 vec![]
             }
@@ -815,33 +832,42 @@ impl App {
                 vec![]
             }
             Action::NextSearchMatch => {
-                if !self.search_match_lines.is_empty() {
-                    self.search_current_match =
-                        (self.search_current_match + 1) % self.search_match_lines.len();
-                    let scroll_target =
-                        self.search_match_lines[self.search_current_match] as u16;
-                    if self.view == View::ActivityDetail {
-                        self.activity_detail_scroll = scroll_target;
-                    } else {
-                        self.event_detail_scroll = scroll_target;
+                if self.is_detail_view() {
+                    if !self.search_match_lines.is_empty() {
+                        self.search_current_match =
+                            (self.search_current_match + 1) % self.search_match_lines.len();
+                        let scroll_target =
+                            self.search_match_lines[self.search_current_match] as u16;
+                        self.set_detail_scroll(scroll_target);
                     }
+                } else if !self.search_filtered_indices.is_empty() {
+                    self.search_current_match =
+                        (self.search_current_match + 1) % self.search_filtered_indices.len();
+                    let row = self.search_filtered_indices[self.search_current_match];
+                    self.current_table_state_mut().select(Some(row));
                 }
                 vec![]
             }
             Action::PrevSearchMatch => {
-                if !self.search_match_lines.is_empty() {
+                if self.is_detail_view() {
+                    if !self.search_match_lines.is_empty() {
+                        self.search_current_match = if self.search_current_match == 0 {
+                            self.search_match_lines.len() - 1
+                        } else {
+                            self.search_current_match - 1
+                        };
+                        let scroll_target =
+                            self.search_match_lines[self.search_current_match] as u16;
+                        self.set_detail_scroll(scroll_target);
+                    }
+                } else if !self.search_filtered_indices.is_empty() {
                     self.search_current_match = if self.search_current_match == 0 {
-                        self.search_match_lines.len() - 1
+                        self.search_filtered_indices.len() - 1
                     } else {
                         self.search_current_match - 1
                     };
-                    let scroll_target =
-                        self.search_match_lines[self.search_current_match] as u16;
-                    if self.view == View::ActivityDetail {
-                        self.activity_detail_scroll = scroll_target;
-                    } else {
-                        self.event_detail_scroll = scroll_target;
-                    }
+                    let row = self.search_filtered_indices[self.search_current_match];
+                    self.current_table_state_mut().select(Some(row));
                 }
                 vec![]
             }
@@ -1376,24 +1402,153 @@ impl App {
         }
     }
 
+    /// Whether the current view is a detail (scrollable) view
+    pub fn is_detail_view(&self) -> bool {
+        matches!(
+            self.view,
+            View::ActivityDetail | View::EventDetail | View::WorkflowDetail | View::InsightDetail
+        )
+    }
+
+    /// Set the scroll offset for the current detail view
+    fn set_detail_scroll(&mut self, target: u16) {
+        match self.view {
+            View::ActivityDetail => self.activity_detail_scroll = target,
+            View::EventDetail => self.event_detail_scroll = target,
+            View::InsightDetail => self.insight_detail_scroll = target,
+            _ => {}
+        }
+    }
+
+    /// Clear all search-related state
+    fn clear_search_state(&mut self) {
+        self.search_input.clear();
+        self.search_query = None;
+        self.search_match_lines.clear();
+        self.search_current_match = 0;
+        self.search_filtered_indices.clear();
+    }
+
     /// Recompute search match lines for the current detail view
     fn recompute_search_matches(&mut self) {
         if let Some(ref query) = self.search_query {
-            if self.view == View::ActivityDetail {
-                // Build the same lines that the widget will render
-                let lines = self.build_activity_detail_lines();
-                let (_, indices) = highlight_search_matches(&lines, query);
-                self.search_match_lines = indices;
-                self.search_current_match = 0;
-            } else if let Some(event) = self.selected_event_cloned() {
-                let lines = json_to_lines(&event.details);
-                let (_, indices) = highlight_search_matches(&lines, query);
-                self.search_match_lines = indices;
-                self.search_current_match = 0;
-            }
+            let lines = match self.view {
+                View::ActivityDetail => self.build_activity_detail_lines(),
+                View::EventDetail => {
+                    if let Some(event) = self.selected_event_cloned() {
+                        crate::widgets::EventDetailWidget::build_lines_static(&event)
+                    } else {
+                        Vec::new()
+                    }
+                }
+                View::WorkflowDetail => self.build_workflow_detail_lines(),
+                View::InsightDetail => self.build_insight_detail_lines(),
+                _ => Vec::new(),
+            };
+            let (_, indices) = highlight_search_matches(&lines, query);
+            self.search_match_lines = indices;
+            self.search_current_match = 0;
         } else {
             self.search_match_lines.clear();
             self.search_current_match = 0;
+        }
+    }
+
+    /// Compute which list rows match the current search query
+    fn recompute_list_search(&mut self) {
+        self.search_filtered_indices.clear();
+        let query = match self.search_query {
+            Some(ref q) if !q.is_empty() => q.to_lowercase(),
+            _ => return,
+        };
+
+        match self.view {
+            View::WorkflowList => {
+                if let LoadState::Loaded(ref wfs) = self.workflows {
+                    for (i, wf) in wfs.iter().enumerate() {
+                        let text = format!(
+                            "{} {} {} {}",
+                            wf.workflow_id, wf.workflow_type, wf.status, wf.task_queue
+                        )
+                        .to_lowercase();
+                        if text.contains(&query) {
+                            self.search_filtered_indices.push(i);
+                        }
+                    }
+                }
+            }
+            View::TypeList => {
+                if let LoadState::Loaded(ref stats) = self.type_stats {
+                    for (i, ts) in stats.iter().enumerate() {
+                        if ts.workflow_type.to_lowercase().contains(&query) {
+                            self.search_filtered_indices.push(i);
+                        }
+                    }
+                }
+            }
+            View::ActivityList => {
+                // Search through the sorted timeline
+                let mut items: Vec<(i64, bool, usize)> = Vec::new();
+                for (i, a) in self.activities.iter().enumerate() {
+                    items.push((a.scheduled_event_id, true, i));
+                }
+                for (i, cw) in self.child_workflows.iter().enumerate() {
+                    items.push((cw.initiated_event_id, false, i));
+                }
+                items.sort_by_key(|&(key, _, _)| key);
+
+                for (row_idx, (_, is_activity, idx)) in items.iter().enumerate() {
+                    let text = if *is_activity {
+                        let a = &self.activities[*idx];
+                        format!(
+                            "{} {} {}",
+                            a.activity_type,
+                            a.activity_id,
+                            a.status.short_name()
+                        )
+                    } else {
+                        let cw = &self.child_workflows[*idx];
+                        format!(
+                            "{} {} {}",
+                            cw.workflow_type,
+                            cw.workflow_id,
+                            cw.status.short_name()
+                        )
+                    }
+                    .to_lowercase();
+                    if text.contains(&query) {
+                        self.search_filtered_indices.push(row_idx);
+                    }
+                }
+            }
+            View::EventLog => {
+                if let LoadState::Loaded(ref events) = self.activity_events {
+                    for (i, ev) in events.iter().enumerate() {
+                        let text =
+                            format!("{} {}", ev.event_id, ev.event_type).to_lowercase();
+                        if text.contains(&query) {
+                            self.search_filtered_indices.push(i);
+                        }
+                    }
+                }
+            }
+            View::Insights => {
+                if let LoadState::Loaded(ref result) = self.insights {
+                    for (i, f) in result.findings.iter().enumerate() {
+                        let text = format!(
+                            "{} {} {}",
+                            f.severity.label(),
+                            f.category.label(),
+                            f.title
+                        )
+                        .to_lowercase();
+                        if text.contains(&query) {
+                            self.search_filtered_indices.push(i);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1403,8 +1558,35 @@ impl App {
         use crate::widgets::ActivityDetailWidget;
         match self.selected_timeline_item() {
             Some(TimelineItemRef::Activity(a)) => ActivityDetailWidget::build_activity_lines(a),
-            Some(TimelineItemRef::ChildWorkflow(cw)) => ActivityDetailWidget::build_child_wf_lines(cw),
+            Some(TimelineItemRef::ChildWorkflow(cw)) => {
+                ActivityDetailWidget::build_child_wf_lines(cw)
+            }
             None => Vec::new(),
+        }
+    }
+
+    /// Build searchable lines for InsightDetail view
+    fn build_insight_detail_lines(&self) -> Vec<ratatui::text::Line<'static>> {
+        use crate::widgets::InsightDetailWidget;
+        if let LoadState::Loaded(ref result) = self.insights {
+            if let Some(finding) = self
+                .insights_table_state
+                .selected()
+                .and_then(|i| result.findings.get(i))
+            {
+                return InsightDetailWidget::build_lines_static(finding, self.insight_entity_index);
+            }
+        }
+        Vec::new()
+    }
+
+    /// Build searchable lines for WorkflowDetail view
+    fn build_workflow_detail_lines(&self) -> Vec<ratatui::text::Line<'static>> {
+        use crate::widgets::WorkflowDetailWidget;
+        if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
+            WorkflowDetailWidget::build_lines_static(detail)
+        } else {
+            Vec::new()
         }
     }
 

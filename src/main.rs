@@ -495,6 +495,42 @@ fn render(app: &App, frame: &mut Frame) {
         layout[1],
     );
 
+    // Build search status string for display in filter bar
+    let search_status_text;
+    let search_status: Option<&str> = if app.search_query.is_some()
+        && app.input_mode != InputMode::SearchInput
+    {
+        let query = app.search_query.as_deref().unwrap_or("");
+        if app.is_detail_view() {
+            let total = app.search_match_lines.len();
+            if total > 0 {
+                search_status_text = format!(
+                    "Search: \"{}\" ({}/{}) — n/N navigate, Esc clear",
+                    query,
+                    app.search_current_match + 1,
+                    total
+                );
+            } else {
+                search_status_text = format!("Search: \"{}\" (no matches) — Esc clear", query);
+            }
+        } else {
+            let total = app.search_filtered_indices.len();
+            if total > 0 {
+                search_status_text = format!(
+                    "Search: \"{}\" ({}/{} matches) — n/N navigate, Esc clear",
+                    query,
+                    app.search_current_match + 1,
+                    total
+                );
+            } else {
+                search_status_text = format!("Search: \"{}\" (no matches) — Esc clear", query);
+            }
+        }
+        Some(&search_status_text)
+    } else {
+        None
+    };
+
     // Render filter input
     let filter_widget = if app.input_mode == InputMode::SearchInput {
         FilterInput::new(&app.search_input)
@@ -504,14 +540,14 @@ fn render(app: &App, frame: &mut Frame) {
         FilterInput::new(&app.date_range_input)
             .active(true)
             .date_mode(true)
-    } else if app.view == View::TypeList && app.input_mode == InputMode::FilterInput {
+    } else if app.input_mode == InputMode::FilterInput {
         FilterInput::new(&app.filter_input)
             .active(true)
-            .search_mode(true)
     } else {
         FilterInput::new(&app.filter_input)
-            .active(app.input_mode == InputMode::FilterInput)
+            .active(false)
             .date_label(app.active_date_range_label.as_deref())
+            .search_status(search_status)
     };
     frame.render_widget(filter_widget, layout[2]);
 
@@ -543,7 +579,14 @@ fn render(app: &App, frame: &mut Frame) {
         }
         View::WorkflowDetail => {
             if let Some(ref detail) = app.selected_workflow {
-                frame.render_widget(WorkflowDetailWidget::new(detail), layout[3]);
+                frame.render_widget(
+                    WorkflowDetailWidget::new(detail).search(
+                        app.search_query.as_deref(),
+                        app.search_current_match,
+                        app.search_match_lines.len(),
+                    ),
+                    layout[3],
+                );
             }
         }
         View::ActivityList => {
@@ -624,7 +667,12 @@ fn render(app: &App, frame: &mut Frame) {
                 };
                 frame.render_widget(
                     InsightDetailWidget::new(finding, app.insight_detail_scroll)
-                        .selected_entity(sel_entity),
+                        .selected_entity(sel_entity)
+                        .search(
+                            app.search_query.as_deref(),
+                            app.search_current_match,
+                            app.search_match_lines.len(),
+                        ),
                     layout[3],
                 );
             }

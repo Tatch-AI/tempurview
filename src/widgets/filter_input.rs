@@ -12,6 +12,7 @@ pub struct FilterInput<'a> {
     is_date_mode: bool,
     is_search_mode: bool,
     date_label: Option<&'a str>,
+    search_status: Option<&'a str>,
 }
 
 impl<'a> FilterInput<'a> {
@@ -22,6 +23,7 @@ impl<'a> FilterInput<'a> {
             is_date_mode: false,
             is_search_mode: false,
             date_label: None,
+            search_status: None,
         }
     }
 
@@ -42,6 +44,11 @@ impl<'a> FilterInput<'a> {
 
     pub fn date_label(mut self, label: Option<&'a str>) -> Self {
         self.date_label = label;
+        self
+    }
+
+    pub fn search_status(mut self, status: Option<&'a str>) -> Self {
+        self.search_status = status;
         self
     }
 }
@@ -65,11 +72,13 @@ impl Widget for FilterInput<'_> {
         // Show cursor at the end when active
         let display_text = if self.is_active {
             format!("{}_", self.input)
+        } else if let Some(status) = self.search_status {
+            status.to_string()
         } else if self.input.is_empty() {
             if self.date_label.is_some() {
-                format!("Press / to filter, d for date range...")
+                "Press / to search, f to filter, d for date range...".to_string()
             } else {
-                "Press / to filter...".to_string()
+                "Press / to search...".to_string()
             }
         } else {
             self.input.to_string()

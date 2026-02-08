@@ -52,7 +52,8 @@ impl HelpBar {
                 ("s", "Sort"),
                 ("T", "Types"),
                 ("I", "Insights"),
-                ("/", "Filter"),
+                ("/", "Search"),
+                ("f", "Filter"),
                 ("1-7", "Status"),
                 ("r", "Refresh"),
                 ("?", "Help"),
@@ -63,6 +64,7 @@ impl HelpBar {
                 ("d", "Date"),
                 ("s", "Sort"),
                 ("/", "Search"),
+                ("f", "Filter"),
                 ("Esc", "Back"),
                 ("?", "Help"),
             ],
@@ -70,16 +72,18 @@ impl HelpBar {
                 ("Esc", "Back"),
                 ("a", "Activities"),
                 ("l", "Event Log"),
+                ("/", "Search"),
+                ("n/N", "Next/Prev"),
                 ("x", "Copy URL"),
                 ("gx", "Open URL"),
-                ("c", "Cancel"),
-                ("t", "Terminate"),
                 ("r", "Refresh"),
-                ("q", "Quit"),
+                ("?", "Help"),
             ],
             (View::ActivityList, _) => vec![
                 ("j/k", "Navigate"),
                 ("Enter", "Details"),
+                ("/", "Search"),
+                ("n/N", "Next/Prev"),
                 ("Esc", "Back"),
                 ("r", "Refresh"),
                 ("?", "Help"),
@@ -96,6 +100,8 @@ impl HelpBar {
             (View::Insights, _) => vec![
                 ("j/k", "Navigate"),
                 ("Enter", "Details"),
+                ("/", "Search"),
+                ("n/N", "Next/Prev"),
                 ("Esc", "Back"),
                 ("r", "Re-scan"),
                 ("?", "Help"),
@@ -104,7 +110,9 @@ impl HelpBar {
                 ("j/k", "Page"),
                 ("^D/^U", "Page"),
                 ("g/G", "Top/Bottom"),
-                ("n/p", "Next/Prev Entity"),
+                ("/", "Search"),
+                ("n/N", "Next/Prev"),
+                ("n/p", "Entity"),
                 ("Enter", "View Workflow"),
                 ("Esc", "Back"),
                 ("?", "Help"),
@@ -112,6 +120,8 @@ impl HelpBar {
             (View::EventLog, _) => vec![
                 ("j/k", "Navigate"),
                 ("Enter", "Details"),
+                ("/", "Search"),
+                ("n/N", "Next/Prev"),
                 ("Esc", "Back"),
                 ("r", "Refresh"),
                 ("?", "Help"),
@@ -186,8 +196,14 @@ Sorting:
     then: s/t/w/d (WorkflowList)
     then: t/n/1-7 (TypeList)
 
+Search:
+  /           Search in current view
+  n           Next match
+  N           Previous match
+  Esc         Clear search
+
 Filtering:
-  /           Open filter input
+  f           Open Temporal filter (list views)
   1           Filter: Running
   2           Filter: Completed
   3           Filter: Failed
@@ -217,11 +233,11 @@ Activities / Event Log:
   Enter       Expand activity / Event details
   Esc         Back to workflow detail
 
-Event Detail:
+Detail Views (Event/Activity/Workflow/Insight):
   j/k         Scroll up/down
   Ctrl+D/U    Half-page down/up
   g/G         Top / Bottom
-  /           Search in JSON
+  /           Search in content
   n/N         Next / Previous match
   Esc         Clear search / Go back
 

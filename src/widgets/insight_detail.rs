@@ -1,4 +1,4 @@
-use crate::domain::InsightFinding;
+use crate::domain::{highlight_search_matches, InsightFinding};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -12,6 +12,9 @@ pub struct InsightDetailWidget<'a> {
     finding: &'a InsightFinding,
     scroll: u16,
     selected_entity: Option<usize>,
+    search_query: Option<&'a str>,
+    search_current_match: usize,
+    search_match_count: usize,
 }
 
 impl<'a> InsightDetailWidget<'a> {
@@ -20,12 +23,37 @@ impl<'a> InsightDetailWidget<'a> {
             finding,
             scroll,
             selected_entity: None,
+            search_query: None,
+            search_current_match: 0,
+            search_match_count: 0,
         }
     }
 
     pub fn selected_entity(mut self, index: Option<usize>) -> Self {
         self.selected_entity = index;
         self
+    }
+
+    pub fn search(
+        mut self,
+        query: Option<&'a str>,
+        current_match: usize,
+        match_count: usize,
+    ) -> Self {
+        self.search_query = query;
+        self.search_current_match = current_match;
+        self.search_match_count = match_count;
+        self
+    }
+
+    /// Public static method for App to build lines for search matching
+    pub fn build_lines_static(finding: &InsightFinding, entity_index: usize) -> Vec<Line<'static>> {
+        let selected = if finding.affected_entities.is_empty() {
+            None
+        } else {
+            Some(entity_index)
+        };
+        Self::build_lines(finding, selected)
     }
 
     fn build_lines(finding: &InsightFinding, selected_entity: Option<usize>) -> Vec<Line<'static>> {
@@ -156,18 +184,39 @@ impl Widget for InsightDetailWidget<'_> {
             .fg(self.finding.severity.color())
             .add_modifier(Modifier::BOLD);
 
-        let title = format!(
+        let mut title = format!(
             " {} | {} | {} ",
             self.finding.severity.label(),
             self.finding.category.label(),
             truncate_title(&self.finding.title, area.width.saturating_sub(30) as usize),
         );
 
+        if let Some(query) = self.search_query {
+            if self.search_match_count > 0 {
+                title.push_str(&format!(
+                    " [{}/{} \"{}\"] ",
+                    self.search_current_match + 1,
+                    self.search_match_count,
+                    query
+                ));
+            } else {
+                title.push_str(&format!(" [no matches for \"{}\"] ", query));
+            }
+        }
+
         let block = Block::default()
             .borders(Borders::ALL)
             .title(Span::styled(title, sev_style));
 
-        let lines = Self::build_lines(self.finding, self.selected_entity);
+        let mut lines = Self::build_lines(self.finding, self.selected_entity);
+
+        // Apply search highlighting if active
+        if let Some(query) = self.search_query {
+            if !query.is_empty() {
+                let (highlighted, _) = highlight_search_matches(&lines, query);
+                lines = highlighted;
+            }
+        }
 
         let paragraph = Paragraph::new(lines)
             .block(block)

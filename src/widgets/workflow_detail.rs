@@ -1,5 +1,5 @@
 use crate::app::LoadState;
-use crate::domain::WorkflowDetail;
+use crate::domain::{highlight_search_matches, json_to_lines, WorkflowDetail};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -11,11 +11,115 @@ use ratatui::{
 /// Renders detailed view of a single workflow
 pub struct WorkflowDetailWidget<'a> {
     detail: &'a LoadState<WorkflowDetail>,
+    search_query: Option<&'a str>,
+    search_current_match: usize,
+    search_match_count: usize,
 }
 
 impl<'a> WorkflowDetailWidget<'a> {
     pub fn new(detail: &'a LoadState<WorkflowDetail>) -> Self {
-        Self { detail }
+        Self {
+            detail,
+            search_query: None,
+            search_current_match: 0,
+            search_match_count: 0,
+        }
+    }
+
+    pub fn search(
+        mut self,
+        query: Option<&'a str>,
+        current_match: usize,
+        match_count: usize,
+    ) -> Self {
+        self.search_query = query;
+        self.search_current_match = current_match;
+        self.search_match_count = match_count;
+        self
+    }
+
+    /// Build all searchable lines for the workflow detail (used by App for search matching)
+    pub fn build_lines_static(detail: &WorkflowDetail) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        // Metadata
+        let metadata = format_metadata(detail);
+        for (key, value) in &metadata {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}: ", key),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(value.clone()),
+            ]));
+        }
+        lines.push(Line::from(""));
+
+        // Input
+        lines.push(Line::from(Span::styled(
+            "Input:",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        match &detail.input {
+            Some(v) => lines.extend(json_to_lines(v)),
+            None => lines.push(Line::from("(none)")),
+        }
+        lines.push(Line::from(""));
+
+        // Output
+        lines.push(Line::from(Span::styled(
+            "Output:",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )));
+        match &detail.output {
+            Some(v) => lines.extend(json_to_lines(v)),
+            None => lines.push(Line::from("(none)")),
+        }
+
+        // Failure
+        if let Some(ref failure) = detail.failure {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Failure:",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(format!("Type: {}", failure.failure_type)));
+            lines.push(Line::from(format!("Message: {}", failure.message)));
+            if let Some(ref trace) = failure.stack_trace {
+                lines.push(Line::from("Stack Trace:"));
+                for trace_line in trace.lines() {
+                    lines.push(Line::from(format!("  {}", trace_line)));
+                }
+            }
+        }
+
+        // Memo
+        if !detail.memo.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Memo:",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )));
+            for (key, val) in &detail.memo {
+                lines.push(Line::from(format!("  {}: {}", key, val)));
+            }
+        }
+
+        // Search attributes
+        if !detail.search_attributes.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Search Attributes:",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )));
+            for (key, val) in &detail.search_attributes {
+                lines.push(Line::from(format!("  {}: {}", key, val)));
+            }
+        }
+
+        lines
     }
 }
 
@@ -23,48 +127,75 @@ impl Widget for WorkflowDetailWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         match self.detail {
             LoadState::Loaded(detail) => {
-                let layout = Layout::vertical([
-                    Constraint::Length(8), // Metadata
-                    Constraint::Length(8), // Input
-                    Constraint::Length(8), // Output
-                    Constraint::Fill(1),   // Failure (if any)
-                ])
-                .split(area);
-
-                // Render metadata section
-                render_metadata_section(detail, layout[0], buf);
-
-                // Render input section
-                render_json_section("Input", &detail.input, layout[1], buf);
-
-                // Render output section
-                render_json_section("Output", &detail.output, layout[2], buf);
-
-                // Render failure section if present
-                if let Some(ref failure) = detail.failure {
-                    let block = Block::default()
-                        .borders(Borders::ALL)
-                        .title(Span::styled("Failure", Style::default().fg(Color::Red)))
-                        .border_style(Style::default().fg(Color::Red));
-
-                    let inner = block.inner(layout[3]);
-                    block.render(layout[3], buf);
-
-                    let failure_text = format!(
-                        "Type: {}\nMessage: {}\n{}",
-                        failure.failure_type,
-                        failure.message,
-                        failure
-                            .stack_trace
-                            .as_deref()
-                            .map(|s| format!("\nStack Trace:\n{}", s))
-                            .unwrap_or_default()
+                if self.search_query.is_some() {
+                    // Search mode: render as a single scrollable block with highlighting
+                    let mut title = format!(
+                        " Workflow: {} ({}) ",
+                        detail.summary.workflow_type, detail.summary.status
                     );
+                    if let Some(query) = self.search_query {
+                        if self.search_match_count > 0 {
+                            title.push_str(&format!(
+                                " [{}/{} \"{}\"] ",
+                                self.search_current_match + 1,
+                                self.search_match_count,
+                                query
+                            ));
+                        } else {
+                            title.push_str(&format!(" [no matches for \"{}\"] ", query));
+                        }
+                    }
+                    let block = Block::default().borders(Borders::ALL).title(title);
+                    let mut lines = Self::build_lines_static(detail);
+                    if let Some(query) = self.search_query {
+                        if !query.is_empty() {
+                            let (highlighted, _) = highlight_search_matches(&lines, query);
+                            lines = highlighted;
+                        }
+                    }
+                    let paragraph = Paragraph::new(lines)
+                        .block(block)
+                        .wrap(Wrap { trim: false });
+                    paragraph.render(area, buf);
+                } else {
+                    // Normal mode: multi-section fixed layout
+                    let layout = Layout::vertical([
+                        Constraint::Length(8), // Metadata
+                        Constraint::Length(8), // Input
+                        Constraint::Length(8), // Output
+                        Constraint::Fill(1),   // Failure (if any)
+                    ])
+                    .split(area);
 
-                    let paragraph = Paragraph::new(failure_text)
-                        .style(Style::default().fg(Color::Red))
-                        .wrap(Wrap { trim: true });
-                    paragraph.render(inner, buf);
+                    render_metadata_section(detail, layout[0], buf);
+                    render_json_section("Input", &detail.input, layout[1], buf);
+                    render_json_section("Output", &detail.output, layout[2], buf);
+
+                    if let Some(ref failure) = detail.failure {
+                        let block = Block::default()
+                            .borders(Borders::ALL)
+                            .title(Span::styled("Failure", Style::default().fg(Color::Red)))
+                            .border_style(Style::default().fg(Color::Red));
+
+                        let inner = block.inner(layout[3]);
+                        block.render(layout[3], buf);
+
+                        let failure_text = format!(
+                            "Type: {}\nMessage: {}\n{}",
+                            failure.failure_type,
+                            failure.message,
+                            failure
+                                .stack_trace
+                                .as_deref()
+                                .map(|s| format!("\nStack Trace:\n{}", s))
+                                .unwrap_or_default()
+                        );
+
+                        let paragraph = Paragraph::new(failure_text)
+                            .style(Style::default().fg(Color::Red))
+                            .wrap(Wrap { trim: true });
+                        paragraph.render(inner, buf);
+                    }
                 }
             }
             LoadState::Loading => {

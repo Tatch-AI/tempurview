@@ -56,6 +56,11 @@ impl<'a> EventDetailWidget<'a> {
         }
     }
 
+    /// Public static method for App to build lines for search matching
+    pub fn build_lines_static(event: &HistoryEvent) -> Vec<Line<'static>> {
+        Self::build_lines(event)
+    }
+
     fn build_lines(event: &HistoryEvent) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 

@@ -137,11 +137,12 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('k') | KeyCode::Up => Some(Action::NavigateUp),
                 KeyCode::Char('g') => Some(Action::EnterPendingG),
                 KeyCode::Char('G') => Some(Action::NavigateBottom),
-                KeyCode::Char('/') => match view {
-                    View::EventDetail | View::ActivityDetail => Some(Action::OpenSearchInput),
-                    View::InsightDetail | View::WorkflowDetail => None,
-                    _ => Some(Action::OpenFilterInput),
-                },
+                KeyCode::Char('/') => Some(Action::OpenSearchInput),
+                KeyCode::Char('f')
+                    if view == View::WorkflowList || view == View::TypeList =>
+                {
+                    Some(Action::OpenFilterInput)
+                }
                 KeyCode::Char('r') => Some(Action::Refresh),
                 KeyCode::Char('?') => Some(Action::ToggleHelp),
                 KeyCode::PageUp => Some(Action::PageUp),
@@ -216,22 +217,14 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('l') if view == View::WorkflowDetail => {
                     Some(Action::ViewEventLog)
                 }
-                KeyCode::Char('n')
-                    if view == View::EventDetail || view == View::ActivityDetail =>
-                {
-                    Some(Action::NextSearchMatch)
-                }
-                KeyCode::Char('N')
-                    if view == View::EventDetail || view == View::ActivityDetail =>
-                {
-                    Some(Action::PrevSearchMatch)
-                }
                 KeyCode::Char('n') if view == View::InsightDetail => {
                     Some(Action::NextAffectedEntity)
                 }
                 KeyCode::Char('p') if view == View::InsightDetail => {
                     Some(Action::PrevAffectedEntity)
                 }
+                KeyCode::Char('n') => Some(Action::NextSearchMatch),
+                KeyCode::Char('N') => Some(Action::PrevSearchMatch),
                 KeyCode::Char('x') if view == View::WorkflowDetail => {
                     Some(Action::CopyWorkflowUrl)
                 }
