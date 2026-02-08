@@ -24,6 +24,7 @@ pub struct TypeListWidget<'a> {
     sort: &'a Option<(TypeListColumn, SortDirection)>,
     date_label: Option<&'a str>,
     name_filter: Option<&'a str>,
+    search_query: Option<&'a str>,
 }
 
 impl<'a> TypeListWidget<'a> {
@@ -36,6 +37,7 @@ impl<'a> TypeListWidget<'a> {
             sort,
             date_label: None,
             name_filter: None,
+            search_query: None,
         }
     }
 
@@ -46,6 +48,11 @@ impl<'a> TypeListWidget<'a> {
 
     pub fn name_filter(mut self, filter: Option<&'a str>) -> Self {
         self.name_filter = filter;
+        self
+    }
+
+    pub fn search_query(mut self, query: Option<&'a str>) -> Self {
+        self.search_query = query;
         self
     }
 
@@ -141,20 +148,34 @@ impl StatefulWidget for TypeListWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         match self.type_stats {
             LoadState::Loaded(stats) => {
-                // Apply client-side name filter
-                let filtered: Vec<&TypeStat> = if let Some(filter) = self.name_filter {
-                    if filter.is_empty() {
-                        stats.iter().collect()
-                    } else {
-                        let lower = filter.to_lowercase();
-                        stats
-                            .iter()
-                            .filter(|s| s.workflow_type.to_lowercase().contains(&lower))
-                            .collect()
-                    }
-                } else {
-                    stats.iter().collect()
-                };
+                // Apply client-side name filter and search query
+                let filtered: Vec<&TypeStat> = stats
+                    .iter()
+                    .filter(|s| {
+                        // Apply name_filter (from 'f' key)
+                        if let Some(filter) = self.name_filter {
+                            if !filter.is_empty()
+                                && !s
+                                    .workflow_type
+                                    .to_lowercase()
+                                    .contains(&filter.to_lowercase())
+                            {
+                                return false;
+                            }
+                        }
+                        // Apply search_query (from '/' key)
+                        if let Some(query) = self.search_query.filter(|q| !q.is_empty()) {
+                            if !s
+                                .workflow_type
+                                .to_lowercase()
+                                .contains(&query.to_lowercase())
+                            {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .collect();
 
                 let title = self.build_title(filtered.len());
 

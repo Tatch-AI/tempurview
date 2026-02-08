@@ -517,10 +517,8 @@ fn render(app: &App, frame: &mut Frame) {
             let total = app.search_filtered_indices.len();
             if total > 0 {
                 search_status_text = format!(
-                    "Search: \"{}\" ({}/{} matches) — n/N navigate, Esc clear",
-                    query,
-                    app.search_current_match + 1,
-                    total
+                    "Search: \"{}\" ({} matches) — n/N navigate, Esc clear",
+                    query, total
                 );
             } else {
                 search_status_text = format!("Search: \"{}\" (no matches) — Esc clear", query);
@@ -533,9 +531,15 @@ fn render(app: &App, frame: &mut Frame) {
 
     // Render filter input
     let filter_widget = if app.input_mode == InputMode::SearchInput {
+        let live_match_count = if !app.is_detail_view() && !app.search_input.is_empty() {
+            Some(app.search_filtered_indices.len())
+        } else {
+            None
+        };
         FilterInput::new(&app.search_input)
             .active(true)
             .search_mode(true)
+            .match_count(live_match_count)
     } else if app.input_mode == InputMode::DateRangeCustom {
         FilterInput::new(&app.date_range_input)
             .active(true)
@@ -562,7 +566,8 @@ fn render(app: &App, frame: &mut Frame) {
                     &app.visible_columns,
                     &app.workflow_sort,
                 )
-                .date_label(app.active_date_range_label.as_deref()),
+                .date_label(app.active_date_range_label.as_deref())
+                .search_query(app.search_query.as_deref()),
                 layout[3],
                 &mut table_state,
             );
@@ -572,7 +577,8 @@ fn render(app: &App, frame: &mut Frame) {
             frame.render_stateful_widget(
                 TypeListWidget::new(&app.type_stats, &app.type_sort)
                     .date_label(app.active_date_range_label.as_deref())
-                    .name_filter(app.type_name_filter.as_deref()),
+                    .name_filter(app.type_name_filter.as_deref())
+                    .search_query(app.search_query.as_deref()),
                 layout[3],
                 &mut table_state,
             );
@@ -597,7 +603,8 @@ fn render(app: &App, frame: &mut Frame) {
                     &app.activities,
                     &app.child_workflows,
                 )
-                .expanded(app.activity_table_state.selected()),
+                .expanded(app.activity_table_state.selected())
+                .search_query(app.search_query.as_deref()),
                 layout[3],
                 &mut table_state,
             );
@@ -625,7 +632,8 @@ fn render(app: &App, frame: &mut Frame) {
         View::EventLog => {
             let mut table_state = app.event_log_table_state.clone();
             frame.render_stateful_widget(
-                EventLogWidget::new(&app.activity_events),
+                EventLogWidget::new(&app.activity_events)
+                    .search_query(app.search_query.as_deref()),
                 layout[3],
                 &mut table_state,
             );
@@ -645,7 +653,8 @@ fn render(app: &App, frame: &mut Frame) {
         View::Insights => {
             let mut table_state = app.insights_table_state.clone();
             frame.render_stateful_widget(
-                InsightsWidget::new(&app.insights),
+                InsightsWidget::new(&app.insights)
+                    .search_query(app.search_query.as_deref()),
                 layout[3],
                 &mut table_state,
             );

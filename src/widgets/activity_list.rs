@@ -32,6 +32,7 @@ pub struct ActivityListWidget<'a> {
     activities: &'a [ActivityExecution],
     child_workflows: &'a [ChildWorkflowExecution],
     expanded: Option<usize>,
+    search_query: Option<&'a str>,
 }
 
 impl<'a> ActivityListWidget<'a> {
@@ -45,11 +46,17 @@ impl<'a> ActivityListWidget<'a> {
             activities,
             child_workflows,
             expanded: None,
+            search_query: None,
         }
     }
 
     pub fn expanded(mut self, expanded: Option<usize>) -> Self {
         self.expanded = expanded;
+        self
+    }
+
+    pub fn search_query(mut self, query: Option<&'a str>) -> Self {
+        self.search_query = query;
         self
     }
 
@@ -64,6 +71,33 @@ impl<'a> ActivityListWidget<'a> {
             items.push(TimelineItem::ChildWorkflow(cw));
         }
         items.sort_by_key(|item| item.sort_key());
+
+        // Apply search filter if set
+        if let Some(query) = self.search_query.filter(|q| !q.is_empty()) {
+            let lower = query.to_lowercase();
+            items.retain(|item| {
+                let text = match item {
+                    TimelineItem::Activity(a) => {
+                        format!(
+                            "{} {} {}",
+                            a.activity_type,
+                            a.activity_id,
+                            a.status.short_name()
+                        )
+                    }
+                    TimelineItem::ChildWorkflow(cw) => {
+                        format!(
+                            "{} {} {}",
+                            cw.workflow_type,
+                            cw.workflow_id,
+                            cw.status.short_name()
+                        )
+                    }
+                };
+                text.to_lowercase().contains(&lower)
+            });
+        }
+
         items
     }
 

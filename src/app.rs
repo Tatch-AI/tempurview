@@ -670,26 +670,28 @@ impl App {
             }
             Action::ToggleActivityDetail => {
                 let combined_len = self.activities.len() + self.child_workflows.len();
-                if let Some(selected) = self.activity_table_state.selected() {
-                    if selected < combined_len {
-                        if self.expanded_activity == Some(selected) {
+                if let Some(visual_selected) = self.activity_table_state.selected() {
+                    let data_index = self.translate_selection(visual_selected);
+                    if data_index < combined_len {
+                        if self.expanded_activity == Some(data_index) {
                             self.expanded_activity = None;
                         } else {
-                            self.expanded_activity = Some(selected);
+                            self.expanded_activity = Some(data_index);
                         }
                     }
                 }
                 vec![]
             }
             Action::ViewActivityDetail => {
+                // Translate selection through search filter before entering detail
+                let visual_selected = self.activity_table_state.selected().unwrap_or(0);
+                let data_index = self.translate_selection(visual_selected);
+                self.activity_table_state.select(Some(data_index));
                 if self.selected_timeline_item().is_some() {
                     self.view_stack.push(self.view);
                     self.view = View::ActivityDetail;
                     self.activity_detail_scroll = 0;
-                    self.search_input.clear();
-                    self.search_query = None;
-                    self.search_match_lines.clear();
-                    self.search_current_match = 0;
+                    self.clear_search_state();
                 }
                 vec![]
             }
@@ -702,8 +704,11 @@ impl App {
             }
             Action::ViewInsightDetail => {
                 if let LoadState::Loaded(ref result) = self.insights {
-                    if let Some(selected) = self.insights_table_state.selected() {
-                        if selected < result.findings.len() {
+                    if let Some(visual_selected) = self.insights_table_state.selected() {
+                        let data_index = self.translate_selection(visual_selected);
+                        if data_index < result.findings.len() {
+                            // Update table state to data index before entering detail
+                            self.insights_table_state.select(Some(data_index));
                             self.view_stack.push(self.view);
                             self.view = View::InsightDetail;
                             self.insight_detail_scroll = 0;
@@ -769,15 +774,15 @@ impl App {
             Action::ViewEventDetail => {
                 // Enter from EventLog → full-screen event detail
                 if let LoadState::Loaded(ref events) = self.activity_events {
-                    if let Some(selected) = self.event_log_table_state.selected() {
-                        if selected < events.len() {
+                    if let Some(visual_selected) = self.event_log_table_state.selected() {
+                        let data_index = self.translate_selection(visual_selected);
+                        if data_index < events.len() {
+                            // Update table state to data index before entering detail
+                            self.event_log_table_state.select(Some(data_index));
                             self.view_stack.push(self.view);
                             self.view = View::EventDetail;
                             self.event_detail_scroll = 0;
-                            self.search_input.clear();
-                            self.search_query = None;
-                            self.search_match_lines.clear();
-                            self.search_current_match = 0;
+                            self.clear_search_state();
                         }
                     }
                 }
@@ -791,8 +796,9 @@ impl App {
             Action::CloseSearchInput => {
                 self.input_mode = InputMode::Normal;
                 if !self.search_input.is_empty() {
-                    self.search_query = Some(self.search_input.clone());
                     if self.is_detail_view() {
+                        // Detail views: apply search on Enter
+                        self.search_query = Some(self.search_input.clone());
                         self.recompute_search_matches();
                         // Scroll to first match
                         if !self.search_match_lines.is_empty() {
@@ -809,15 +815,8 @@ impl App {
                                 _ => {} // WorkflowDetail has no single scroll offset
                             }
                         }
-                    } else {
-                        // List view: compute matching row indices
-                        self.recompute_list_search();
-                        if !self.search_filtered_indices.is_empty() {
-                            self.search_current_match = 0;
-                            let first = self.search_filtered_indices[0];
-                            self.current_table_state_mut().select(Some(first));
-                        }
                     }
+                    // List views: search is already applied live — just close input bar
                 } else {
                     self.clear_search_state();
                 }
@@ -825,10 +824,25 @@ impl App {
             }
             Action::AppendSearchChar(c) => {
                 self.search_input.push(c);
+                if !self.is_detail_view() {
+                    self.search_query = Some(self.search_input.clone());
+                    self.recompute_list_search();
+                    self.current_table_state_mut().select(Some(0));
+                }
                 vec![]
             }
             Action::DeleteSearchChar => {
                 self.search_input.pop();
+                if !self.is_detail_view() {
+                    if self.search_input.is_empty() {
+                        self.search_query = None;
+                        self.search_filtered_indices.clear();
+                    } else {
+                        self.search_query = Some(self.search_input.clone());
+                        self.recompute_list_search();
+                    }
+                    self.current_table_state_mut().select(Some(0));
+                }
                 vec![]
             }
             Action::NextSearchMatch => {
@@ -840,11 +854,17 @@ impl App {
                             self.search_match_lines[self.search_current_match] as u16;
                         self.set_detail_scroll(scroll_target);
                     }
-                } else if !self.search_filtered_indices.is_empty() {
-                    self.search_current_match =
-                        (self.search_current_match + 1) % self.search_filtered_indices.len();
-                    let row = self.search_filtered_indices[self.search_current_match];
-                    self.current_table_state_mut().select(Some(row));
+                } else {
+                    // List views: filtered rows are all visible, just move selection forward
+                    let len = self.current_list_len();
+                    if len > 0 {
+                        let current = self
+                            .current_table_state_mut()
+                            .selected()
+                            .unwrap_or(0);
+                        let next = (current + 1) % len;
+                        self.current_table_state_mut().select(Some(next));
+                    }
                 }
                 vec![]
             }
@@ -860,14 +880,17 @@ impl App {
                             self.search_match_lines[self.search_current_match] as u16;
                         self.set_detail_scroll(scroll_target);
                     }
-                } else if !self.search_filtered_indices.is_empty() {
-                    self.search_current_match = if self.search_current_match == 0 {
-                        self.search_filtered_indices.len() - 1
-                    } else {
-                        self.search_current_match - 1
-                    };
-                    let row = self.search_filtered_indices[self.search_current_match];
-                    self.current_table_state_mut().select(Some(row));
+                } else {
+                    // List views: filtered rows are all visible, just move selection backward
+                    let len = self.current_list_len();
+                    if len > 0 {
+                        let current = self
+                            .current_table_state_mut()
+                            .selected()
+                            .unwrap_or(0);
+                        let prev = if current == 0 { len - 1 } else { current - 1 };
+                        self.current_table_state_mut().select(Some(prev));
+                    }
                 }
                 vec![]
             }
@@ -1229,6 +1252,11 @@ impl App {
     }
 
     fn current_list_len(&self) -> usize {
+        // When search is active in a list view, return the filtered count
+        if self.search_query.is_some() && !self.is_detail_view() {
+            return self.search_filtered_indices.len();
+        }
+
         match self.view {
             View::TypeList => {
                 if let LoadState::Loaded(ref stats) = self.type_stats {
@@ -1266,7 +1294,8 @@ impl App {
     pub fn selected_workflow_id(&self) -> Option<&str> {
         if let LoadState::Loaded(ref workflows) = self.workflows {
             let selected = self.table_state.selected().unwrap_or(0);
-            workflows.get(selected).map(|wf| wf.workflow_id.as_str())
+            let data_index = self.translate_selection(selected);
+            workflows.get(data_index).map(|wf| wf.workflow_id.as_str())
         } else {
             None
         }
@@ -1275,7 +1304,8 @@ impl App {
     pub fn selected_type_name(&self) -> Option<&str> {
         if let LoadState::Loaded(ref stats) = self.type_stats {
             let selected = self.type_table_state.selected().unwrap_or(0);
-            stats.get(selected).map(|ts| ts.workflow_type.as_str())
+            let data_index = self.translate_selection(selected);
+            stats.get(data_index).map(|ts| ts.workflow_type.as_str())
         } else {
             None
         }
@@ -1363,7 +1393,8 @@ impl App {
     pub fn selected_workflow_run_id(&self) -> Option<&str> {
         if let LoadState::Loaded(ref workflows) = self.workflows {
             let selected = self.table_state.selected().unwrap_or(0);
-            workflows.get(selected).map(|wf| wf.run_id.as_str())
+            let data_index = self.translate_selection(selected);
+            workflows.get(data_index).map(|wf| wf.run_id.as_str())
         } else {
             None
         }
@@ -1417,6 +1448,19 @@ impl App {
             View::EventDetail => self.event_detail_scroll = target,
             View::InsightDetail => self.insight_detail_scroll = target,
             _ => {}
+        }
+    }
+
+    /// Translate a visual selection index through search_filtered_indices when search is active.
+    /// Returns the original data index.
+    fn translate_selection(&self, visual_index: usize) -> usize {
+        if self.search_query.is_some() && !self.search_filtered_indices.is_empty() {
+            self.search_filtered_indices
+                .get(visual_index)
+                .copied()
+                .unwrap_or(visual_index)
+        } else {
+            visual_index
         }
     }
 

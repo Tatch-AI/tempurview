@@ -17,6 +17,7 @@ pub struct WorkflowTableWidget<'a> {
     visible_columns: &'a HashSet<TableColumn>,
     sort: &'a Option<(TableColumn, SortDirection)>,
     date_label: Option<&'a str>,
+    search_query: Option<&'a str>,
 }
 
 impl<'a> WorkflowTableWidget<'a> {
@@ -32,11 +33,17 @@ impl<'a> WorkflowTableWidget<'a> {
             visible_columns,
             sort,
             date_label: None,
+            search_query: None,
         }
     }
 
     pub fn date_label(mut self, label: Option<&'a str>) -> Self {
         self.date_label = label;
+        self
+    }
+
+    pub fn search_query(mut self, query: Option<&'a str>) -> Self {
+        self.search_query = query;
         self
     }
 
@@ -137,8 +144,32 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         match self.workflows {
             LoadState::Loaded(workflows) => {
-                if workflows.is_empty() {
-                    let empty = Paragraph::new("No workflows found")
+                // Apply client-side search filter
+                let filtered: Vec<&WorkflowSummary> =
+                    if let Some(query) = self.search_query.filter(|q| !q.is_empty()) {
+                        let lower = query.to_lowercase();
+                        workflows
+                            .iter()
+                            .filter(|wf| {
+                                format!(
+                                    "{} {} {} {}",
+                                    wf.workflow_id, wf.workflow_type, wf.status, wf.task_queue
+                                )
+                                .to_lowercase()
+                                .contains(&lower)
+                            })
+                            .collect()
+                    } else {
+                        workflows.iter().collect()
+                    };
+
+                if filtered.is_empty() {
+                    let msg = if self.search_query.is_some() {
+                        "No matching workflows"
+                    } else {
+                        "No workflows found"
+                    };
+                    let empty = Paragraph::new(msg)
                         .style(Style::default().add_modifier(Modifier::DIM))
                         .block(
                             Block::default()
@@ -152,7 +183,7 @@ impl StatefulWidget for WorkflowTableWidget<'_> {
                 let header = self.build_header();
                 let widths = self.build_widths();
 
-                let rows: Vec<Row> = workflows
+                let rows: Vec<Row> = filtered
                     .iter()
                     .map(|wf| self.workflow_to_row(wf))
                     .collect();

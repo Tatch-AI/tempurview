@@ -10,11 +10,20 @@ use ratatui::{
 /// Renders a table of insight findings from a health scan
 pub struct InsightsWidget<'a> {
     insights: &'a LoadState<InsightsResult>,
+    search_query: Option<&'a str>,
 }
 
 impl<'a> InsightsWidget<'a> {
     pub fn new(insights: &'a LoadState<InsightsResult>) -> Self {
-        Self { insights }
+        Self {
+            insights,
+            search_query: None,
+        }
+    }
+
+    pub fn search_query(mut self, query: Option<&'a str>) -> Self {
+        self.search_query = query;
+        self
     }
 
     fn build_title(result: &InsightsResult) -> String {
@@ -68,6 +77,40 @@ impl StatefulWidget for InsightsWidget<'_> {
                     return;
                 }
 
+                // Apply search filter
+                let filtered: Vec<&InsightFinding> =
+                    if let Some(query) = self.search_query.filter(|q| !q.is_empty()) {
+                        let lower = query.to_lowercase();
+                        result
+                            .findings
+                            .iter()
+                            .filter(|f| {
+                                format!(
+                                    "{} {} {}",
+                                    f.severity.label(),
+                                    f.category.label(),
+                                    f.title
+                                )
+                                .to_lowercase()
+                                .contains(&lower)
+                            })
+                            .collect()
+                    } else {
+                        result.findings.iter().collect()
+                    };
+
+                if filtered.is_empty() {
+                    let empty = Paragraph::new("No matching findings")
+                        .style(Style::default().add_modifier(Modifier::DIM))
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title(title),
+                        );
+                    empty.render(area, buf);
+                    return;
+                }
+
                 let header = Row::new(vec![
                     Cell::from("SEV").style(Style::default().bold()),
                     Cell::from("CATEGORY").style(Style::default().bold()),
@@ -82,10 +125,9 @@ impl StatefulWidget for InsightsWidget<'_> {
                     ratatui::layout::Constraint::Fill(1),
                 ];
 
-                let rows: Vec<Row> = result
-                    .findings
+                let rows: Vec<Row> = filtered
                     .iter()
-                    .map(Self::finding_to_row)
+                    .map(|f| Self::finding_to_row(f))
                     .collect();
 
                 let table = Table::new(rows, widths)

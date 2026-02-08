@@ -13,6 +13,7 @@ pub struct FilterInput<'a> {
     is_search_mode: bool,
     date_label: Option<&'a str>,
     search_status: Option<&'a str>,
+    match_count: Option<usize>,
 }
 
 impl<'a> FilterInput<'a> {
@@ -24,6 +25,7 @@ impl<'a> FilterInput<'a> {
             is_search_mode: false,
             date_label: None,
             search_status: None,
+            match_count: None,
         }
     }
 
@@ -49,6 +51,11 @@ impl<'a> FilterInput<'a> {
 
     pub fn search_status(mut self, status: Option<&'a str>) -> Self {
         self.search_status = status;
+        self
+    }
+
+    pub fn match_count(mut self, count: Option<usize>) -> Self {
+        self.match_count = count;
         self
     }
 }
@@ -84,10 +91,16 @@ impl Widget for FilterInput<'_> {
             self.input.to_string()
         };
 
+        let title_owned: String;
         let title: &str = if self.is_date_mode {
             "Date range (e.g. 2h, 3d, 1w, 2024-01-15) — Enter to apply, Esc to cancel"
         } else if self.is_search_mode {
-            "Search (Enter to apply, Esc to cancel)"
+            if let Some(count) = self.match_count {
+                title_owned = format!("Search ({} matches) — Enter to close, Esc to cancel", count);
+                &title_owned
+            } else {
+                "Search (Enter to apply, Esc to cancel)"
+            }
         } else if self.is_active {
             "Filter (Enter to apply, Esc to cancel)"
         } else {

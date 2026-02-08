@@ -11,11 +11,20 @@ use ratatui::{
 /// Table view of all history events, selectable with j/k and Enter for drill-down
 pub struct EventLogWidget<'a> {
     events: &'a LoadState<Vec<HistoryEvent>>,
+    search_query: Option<&'a str>,
 }
 
 impl<'a> EventLogWidget<'a> {
     pub fn new(events: &'a LoadState<Vec<HistoryEvent>>) -> Self {
-        Self { events }
+        Self {
+            events,
+            search_query: None,
+        }
+    }
+
+    pub fn search_query(mut self, query: Option<&'a str>) -> Self {
+        self.search_query = query;
+        self
     }
 
     fn event_color(event_type: &str) -> Color {
@@ -63,7 +72,31 @@ impl StatefulWidget for EventLogWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut TableState) {
         match self.events {
             LoadState::Loaded(events) => {
-                let title = format!(" Event Log ({} events) ", events.len());
+                // Apply search filter
+                let filtered: Vec<&HistoryEvent> =
+                    if let Some(query) = self.search_query.filter(|q| !q.is_empty()) {
+                        let lower = query.to_lowercase();
+                        events
+                            .iter()
+                            .filter(|ev| {
+                                format!("{} {}", ev.event_id, ev.event_type)
+                                    .to_lowercase()
+                                    .contains(&lower)
+                            })
+                            .collect()
+                    } else {
+                        events.iter().collect()
+                    };
+
+                let title = if self.search_query.is_some() {
+                    format!(
+                        " Event Log ({}/{} events) ",
+                        filtered.len(),
+                        events.len()
+                    )
+                } else {
+                    format!(" Event Log ({} events) ", events.len())
+                };
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .title(Span::styled(
@@ -79,7 +112,7 @@ impl StatefulWidget for EventLogWidget<'_> {
                     )
                     .bottom_margin(0);
 
-                let rows: Vec<Row> = events
+                let rows: Vec<Row> = filtered
                     .iter()
                     .map(|event| {
                         let ts = event.timestamp.format("%H:%M:%S%.3f").to_string();
