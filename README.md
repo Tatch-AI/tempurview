@@ -209,24 +209,13 @@ See the [design docs](design-docs/) for slide decks on philosophy, architecture,
 
 ## Contributing
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development workflow, and project structure.
+
 ```bash
 git clone https://github.com/Tatch-AI/tempurview.git
 cd tempurview
-
-# Enable git hooks (auto-rebuilds binary on commit)
 git config core.hooksPath hooks
-
-# Build (compiles proto files via build.rs)
-cargo build
-
-# Run tests
-cargo test
-
-# Run with mock data
-cargo run -- --mock
-
-# Run a specific CLI command
-cargo run -- workflow list --mock
+cargo install --path . --force --quiet
 ```
 
 ## Documentation
