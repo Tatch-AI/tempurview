@@ -213,6 +213,9 @@ See the [design docs](design-docs/) for slide decks on philosophy, architecture,
 git clone https://github.com/Tatch-AI/tempurview.git
 cd tempurview
 
+# Enable git hooks (auto-rebuilds binary on commit)
+git config core.hooksPath hooks
+
 # Build (compiles proto files via build.rs)
 cargo build
 

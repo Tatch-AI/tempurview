@@ -1,0 +1,10 @@
+#!/bin/bash
+# Pre-commit hook: rebuild and install tempurview binary
+
+set -e
+
+echo "Building and installing tempurview..."
+cargo build --release
+cargo install --path . --force --quiet
+
+echo "tempurview binary updated."
