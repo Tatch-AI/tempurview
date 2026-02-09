@@ -1141,8 +1141,8 @@ pub fn finalize_scheduling_overhead_findings(stats: &[WorkflowEventStats]) -> Ve
 fn extract_snippet(text: &str, pattern: &str) -> String {
     let lower = text.to_lowercase();
     if let Some(pos) = lower.find(pattern) {
-        let start = pos.saturating_sub(80);
-        let end = (pos + pattern.len() + 120).min(text.len());
+        let start = floor_char_boundary(text, pos.saturating_sub(80));
+        let end = ceil_char_boundary(text, (pos + pattern.len() + 120).min(text.len()));
         let snippet = &text[start..end];
         let snippet = snippet.replace('\n', " ");
         if start > 0 || end < text.len() {
@@ -1155,13 +1155,38 @@ fn extract_snippet(text: &str, pattern: &str) -> String {
     }
 }
 
-/// Truncate a string to max_len characters
+/// Truncate a string to approximately max_len bytes, respecting char boundaries
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() > max_len {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let end = floor_char_boundary(s, max_len.saturating_sub(3));
+        format!("{}...", &s[..end])
     } else {
         s.to_string()
     }
+}
+
+/// Find the largest byte index <= pos that is a char boundary
+fn floor_char_boundary(s: &str, pos: usize) -> usize {
+    if pos >= s.len() {
+        return s.len();
+    }
+    let mut i = pos;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Find the smallest byte index >= pos that is a char boundary
+fn ceil_char_boundary(s: &str, pos: usize) -> usize {
+    if pos >= s.len() {
+        return s.len();
+    }
+    let mut i = pos;
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
 }
 
 /// Select workflows for history sampling. Prioritizes: failed → running → recent completed.
