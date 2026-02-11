@@ -121,12 +121,19 @@ impl TableDisplay for Vec<HistoryEvent> {
 impl TableDisplay for InsightsResult {
     fn to_table(&self) -> Table {
         let mut table = new_table();
-        table.set_header(vec!["SEVERITY", "CATEGORY", "TITLE", "AFFECTED"]);
+        table.set_header(vec!["SEVERITY", "CATEGORY", "TYPE", "TITLE", "LAST SEEN", "AFFECTED"]);
         for f in &self.findings {
+            let wf_type = f.workflow_type.as_deref().unwrap_or("-");
+            let last_seen = f
+                .last_observed
+                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "-".into());
             table.add_row(vec![
                 severity_cell(f),
                 Cell::new(f.category.label()),
+                Cell::new(wf_type),
                 Cell::new(&f.title),
+                Cell::new(last_seen),
                 Cell::new(f.affected_entities.len()),
             ]);
         }

@@ -14,6 +14,7 @@ pub mod domain;
 pub mod event;
 pub mod logging;
 pub mod output;
+pub mod picker;
 pub mod proto;
 pub mod tui;
 pub mod watch;

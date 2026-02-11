@@ -86,10 +86,13 @@ pub enum Action {
     // Column visibility
     ToggleColumn(TableColumn),
 
-    // Sorting
+    // Sorting / Picker
     EnterSortMode,
     SortBy(u8),
-    CloseSort,
+    ClosePicker,
+    PickerUp,
+    PickerDown,
+    PickerSelect,
 
     // Date range
     EnterDateRangeMode,
@@ -161,7 +164,10 @@ impl PartialEq for Action {
             (Action::ToggleColumn(a), Action::ToggleColumn(b)) => a == b,
             (Action::EnterSortMode, Action::EnterSortMode) => true,
             (Action::SortBy(a), Action::SortBy(b)) => a == b,
-            (Action::CloseSort, Action::CloseSort) => true,
+            (Action::ClosePicker, Action::ClosePicker) => true,
+            (Action::PickerUp, Action::PickerUp) => true,
+            (Action::PickerDown, Action::PickerDown) => true,
+            (Action::PickerSelect, Action::PickerSelect) => true,
             (Action::OpenFilterInput, Action::OpenFilterInput) => true,
             (Action::CloseFilterInput, Action::CloseFilterInput) => true,
             (Action::AppendFilterChar(a), Action::AppendFilterChar(b)) => a == b,

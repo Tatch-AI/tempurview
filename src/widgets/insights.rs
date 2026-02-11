@@ -1,5 +1,6 @@
 use crate::app::LoadState;
 use crate::domain::{InsightFinding, InsightsResult, InsightsScanPhase};
+use chrono::Utc;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -103,11 +104,39 @@ impl<'a> InsightsWidget<'a> {
             .fg(finding.severity.color())
             .add_modifier(Modifier::BOLD);
 
+        let wf_type = finding
+            .workflow_type
+            .as_deref()
+            .unwrap_or("-")
+            .to_string();
+
+        let last_observed = finding
+            .last_observed
+            .map(format_relative_time)
+            .unwrap_or_else(|| "-".to_string());
+
         Row::new(vec![
             Cell::from(finding.severity.label().to_string()).style(sev_style),
             Cell::from(finding.category.label().to_string()),
+            Cell::from(wf_type),
             Cell::from(finding.title.clone()),
+            Cell::from(last_observed)
+                .style(Style::default().add_modifier(Modifier::DIM)),
         ])
+    }
+}
+
+fn format_relative_time(t: chrono::DateTime<Utc>) -> String {
+    let delta = Utc::now() - t;
+    let mins = delta.num_minutes();
+    if mins < 1 {
+        "just now".to_string()
+    } else if mins < 60 {
+        format!("{}m ago", mins)
+    } else if mins < 1440 {
+        format!("{}h ago", mins / 60)
+    } else {
+        format!("{}d ago", mins / 1440)
     }
 }
 
@@ -162,15 +191,19 @@ impl StatefulWidget for InsightsWidget<'_> {
                 let header = Row::new(vec![
                     Cell::from("SEV").style(Style::default().bold()),
                     Cell::from("CATEGORY").style(Style::default().bold()),
+                    Cell::from("TYPE").style(Style::default().bold()),
                     Cell::from("FINDING").style(Style::default().bold()),
+                    Cell::from("LAST SEEN").style(Style::default().bold()),
                 ])
                 .style(Style::default().fg(Color::Cyan))
                 .bottom_margin(0);
 
                 let widths = [
                     ratatui::layout::Constraint::Length(6),
-                    ratatui::layout::Constraint::Length(18),
+                    ratatui::layout::Constraint::Length(16),
+                    ratatui::layout::Constraint::Length(22),
                     ratatui::layout::Constraint::Fill(1),
+                    ratatui::layout::Constraint::Length(10),
                 ];
 
                 // Virtual viewport rendering

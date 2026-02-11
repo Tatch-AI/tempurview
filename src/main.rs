@@ -14,8 +14,8 @@ use tempurview::tui::Tui;
 use tempurview::app::TimelineItemRef;
 use tempurview::widgets::{
     ActivityDetailWidget, ActivityListWidget, EventDetailWidget, EventLogWidget, FilterInput,
-    HelpBar, HelpOverlay, InsightDetailWidget, InsightsWidget, StatusDashboard, TypeListWidget,
-    WorkflowDetailWidget, WorkflowListWidget,
+    HelpBar, HelpOverlay, InsightDetailWidget, InsightsWidget, PickerWidget, StatusDashboard,
+    TypeListWidget, WorkflowDetailWidget, WorkflowListWidget,
 };
 
 use ratatui::{
@@ -733,6 +733,11 @@ fn render(app: &mut App, frame: &mut Frame) {
 
     // Render help bar
     frame.render_widget(HelpBar::for_view(app.view, app.input_mode), layout[4]);
+
+    // Render picker overlay if active
+    if let Some(ref picker) = app.picker {
+        frame.render_widget(PickerWidget::new(picker), area);
+    }
 
     // Render error if present
     if let Some(ref error) = app.last_error {

@@ -83,11 +83,18 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
             _ => None,
         },
         InputMode::SortSelect => match key.code {
-            KeyCode::Esc => Some(Action::CloseSort),
+            KeyCode::Esc => Some(Action::ClosePicker),
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::PickerDown),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::PickerUp),
+            KeyCode::Enter => Some(Action::PickerSelect),
             KeyCode::Char(c) => Some(Action::SortBy(c as u8)),
             _ => None,
         },
         InputMode::DateRangeSelect => match key.code {
+            KeyCode::Esc => Some(Action::ClosePicker),
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::PickerDown),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::PickerUp),
+            KeyCode::Enter => Some(Action::PickerSelect),
             KeyCode::Char('1') => Some(Action::SelectDateRangePreset(DateRangePreset::LastHour)),
             KeyCode::Char('2') => Some(Action::SelectDateRangePreset(DateRangePreset::Last6Hours)),
             KeyCode::Char('3') => {
@@ -98,7 +105,6 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
             KeyCode::Char('6') => Some(Action::SelectDateRangePreset(DateRangePreset::Last30Days)),
             KeyCode::Char('0') => Some(Action::ClearDateRange),
             KeyCode::Char('c') => Some(Action::EnterCustomDateInput),
-            KeyCode::Esc => Some(Action::CloseDateRangeMode),
             _ => None,
         },
         InputMode::DateRangeCustom => match key.code {
@@ -157,7 +163,11 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 {
                     Some(Action::EnterDateRangeMode)
                 }
-                KeyCode::Char('s') if view == View::WorkflowList || view == View::TypeList => {
+                KeyCode::Char('s')
+                    if view == View::WorkflowList
+                        || view == View::TypeList
+                        || view == View::Insights =>
+                {
                     Some(Action::EnterSortMode)
                 }
                 KeyCode::Char('T') if view == View::WorkflowList => {

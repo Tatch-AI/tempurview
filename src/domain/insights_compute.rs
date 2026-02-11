@@ -34,6 +34,7 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
         // Finding #3: All-Failed Type
         if total >= InsightThresholds::ALL_FAILED_MIN_WORKFLOWS && failed_count == total {
             let affected: Vec<String> = wfs.iter().map(|w| w.workflow_id.clone()).collect();
+            let last_observed = wfs.iter().filter_map(|w| w.close_time.or(Some(w.start_time))).max();
             findings.push(InsightFinding {
                 severity: InsightSeverity::Critical,
                 category: InsightCategory::TypeAnomaly,
@@ -48,6 +49,8 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
                 affected_entities: affected,
                 computed_at: now,
                 trigger_terms: vec![wf_type.to_string()],
+                workflow_type: Some(wf_type.to_string()),
+                last_observed,
             });
             continue; // Skip the rate-based finding — all-failed is more specific
         }
@@ -66,11 +69,13 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
             };
 
             if let Some(severity) = severity {
-                let affected: Vec<String> = wfs
+                let failed_wfs: Vec<&WorkflowSummary> = wfs
                     .iter()
                     .filter(|w| failed_statuses.contains(&w.status))
-                    .map(|w| w.workflow_id.clone())
+                    .copied()
                     .collect();
+                let affected: Vec<String> = failed_wfs.iter().map(|w| w.workflow_id.clone()).collect();
+                let last_observed = failed_wfs.iter().filter_map(|w| w.close_time.or(Some(w.start_time))).max();
                 findings.push(InsightFinding {
                     severity,
                     category: InsightCategory::FailureRate,
@@ -90,6 +95,8 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
                     affected_entities: affected,
                     computed_at: now,
                     trigger_terms: vec![wf_type.to_string(), format!("{:.0}%", rate * 100.0)],
+                    workflow_type: Some(wf_type.to_string()),
+                    last_observed,
                 });
             }
         }
@@ -121,6 +128,7 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
         let affected: Vec<String> = stuck_wfs.iter().map(|(w, _)| w.workflow_id.clone()).collect();
         let count = stuck_wfs.len();
 
+        let last_observed = stuck_wfs.iter().map(|(w, _)| w.start_time).max();
         findings.push(InsightFinding {
             severity,
             category: InsightCategory::StuckWorkflow,
@@ -138,6 +146,8 @@ pub fn compute_list_findings(workflows: &[WorkflowSummary]) -> Vec<InsightFindin
             affected_entities: affected,
             computed_at: now,
             trigger_terms: vec![wf_type.to_string(), format!("{}h", max_hours)],
+            workflow_type: Some(wf_type.to_string()),
+            last_observed,
         });
     }
 
@@ -213,6 +223,8 @@ pub fn compute_activity_findings(
                     affected_entities: affected_wfs,
                     computed_at: now,
                     trigger_terms: vec![activity_type.to_string(), format!("attempts: {}", max_attempt)],
+                    workflow_type: None,
+                    last_observed: None,
                 });
             }
         }
@@ -248,6 +260,8 @@ pub fn compute_activity_findings(
                 affected_entities: vec![queue_name.to_string()],
                 computed_at: now,
                 trigger_terms: vec![queue_name.to_string(), format!("{:.1}s", median_secs)],
+                workflow_type: None,
+                last_observed: None,
             });
         }
     }
@@ -322,6 +336,8 @@ pub fn compute_activity_findings(
                 affected_entities: affected_wfs,
                 computed_at: now,
                 trigger_terms: terms,
+                workflow_type: None,
+                last_observed: None,
             });
         }
     }
@@ -374,6 +390,8 @@ pub fn compute_activity_findings(
             affected_entities: affected_wfs,
             computed_at: now,
             trigger_terms: vec![activity_type.to_string(), format!("attempt {}", max_attempt)],
+            workflow_type: None,
+            last_observed: None,
         });
     }
 
@@ -507,6 +525,8 @@ pub fn compute_activity_findings(
                     affected_entities: affected_wfs,
                     computed_at: now,
                     trigger_terms: terms,
+                    workflow_type: None,
+                    last_observed: None,
                 });
             }
         }
@@ -573,6 +593,8 @@ pub fn compute_activity_findings(
             affected_entities: affected,
             computed_at: now,
             trigger_terms: terms,
+            workflow_type: None,
+            last_observed: None,
         });
     }
 
@@ -648,6 +670,8 @@ pub fn compute_child_workflow_findings(
                     affected_entities: affected_wfs,
                     computed_at: now,
                     trigger_terms: vec![child_type.to_string()],
+                    workflow_type: None,
+                    last_observed: None,
                 });
             }
         }
@@ -697,6 +721,8 @@ pub fn compute_child_workflow_findings(
                     affected_entities: affected_wfs,
                     computed_at: now,
                     trigger_terms: vec![child_type.to_string(), format!("{:.1}s", median_secs)],
+                    workflow_type: None,
+                    last_observed: None,
                 });
             }
         }
@@ -739,6 +765,8 @@ pub fn compute_signal_findings(
                 affected_entities: vec![wf_id.clone()],
                 computed_at: now,
                 trigger_terms: vec![wf_id.clone(), format!("{} signals", signal_count)],
+                workflow_type: None,
+                last_observed: None,
             });
         }
     }
@@ -832,7 +860,9 @@ pub fn compute_decision_latency_findings(
                 ),
                 affected_entities: vec![wf_type.clone()],
                 computed_at: now,
-                trigger_terms: vec![wf_type, format!("{:.1}s", median_secs)],
+                trigger_terms: vec![wf_type.clone(), format!("{:.1}s", median_secs)],
+                workflow_type: Some(wf_type),
+                last_observed: None,
             });
         }
     }
@@ -922,6 +952,8 @@ pub fn compute_scheduling_overhead_findings(
                 affected_entities: vec![queue.clone()],
                 computed_at: now,
                 trigger_terms: vec![queue, format!("{:.1}s", median_secs)],
+                workflow_type: None,
+                last_observed: None,
             });
         }
     }
@@ -1035,6 +1067,8 @@ pub fn finalize_signal_findings(stats: &[WorkflowEventStats]) -> Vec<InsightFind
                 affected_entities: vec![s.workflow_id.clone()],
                 computed_at: now,
                 trigger_terms: vec![s.workflow_id.clone(), format!("{} signals", s.signal_count)],
+                workflow_type: Some(s.workflow_type.clone()),
+                last_observed: None,
             });
         }
     }
@@ -1081,7 +1115,9 @@ pub fn finalize_decision_latency_findings(stats: &[WorkflowEventStats]) -> Vec<I
                 ),
                 affected_entities: vec![wf_type.clone()],
                 computed_at: now,
-                trigger_terms: vec![wf_type, format!("{:.1}s", median_secs)],
+                trigger_terms: vec![wf_type.clone(), format!("{:.1}s", median_secs)],
+                workflow_type: Some(wf_type),
+                last_observed: None,
             });
         }
     }
@@ -1131,6 +1167,8 @@ pub fn finalize_scheduling_overhead_findings(stats: &[WorkflowEventStats]) -> Ve
                 affected_entities: vec![queue.clone()],
                 computed_at: now,
                 trigger_terms: vec![queue, format!("{:.1}s", median_secs)],
+                workflow_type: None,
+                last_observed: None,
             });
         }
     }
@@ -1700,6 +1738,8 @@ mod tests {
                 affected_entities: vec!["a".to_string()],
                 computed_at: Utc::now(),
                 trigger_terms: vec![],
+                workflow_type: None,
+                last_observed: None,
             },
             InsightFinding {
                 severity: InsightSeverity::Critical,
@@ -1709,6 +1749,8 @@ mod tests {
                 affected_entities: vec!["a".to_string()],
                 computed_at: Utc::now(),
                 trigger_terms: vec![],
+                workflow_type: None,
+                last_observed: None,
             },
             InsightFinding {
                 severity: InsightSeverity::Warning,
@@ -1718,6 +1760,8 @@ mod tests {
                 affected_entities: vec!["a".to_string()],
                 computed_at: Utc::now(),
                 trigger_terms: vec![],
+                workflow_type: None,
+                last_observed: None,
             },
         ];
 
@@ -1887,6 +1931,8 @@ mod tests {
                 affected_entities: vec!["a".to_string()],
                 computed_at: Utc::now(),
                 trigger_terms: vec![],
+                workflow_type: None,
+                last_observed: None,
             },
             InsightFinding {
                 severity: InsightSeverity::Warning,
@@ -1896,6 +1942,8 @@ mod tests {
                 affected_entities: vec!["a".to_string(), "b".to_string(), "c".to_string()],
                 computed_at: Utc::now(),
                 trigger_terms: vec![],
+                workflow_type: None,
+                last_observed: None,
             },
         ];
 
