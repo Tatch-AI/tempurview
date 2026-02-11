@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Execution status of a workflow
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -109,11 +110,11 @@ impl std::fmt::Display for WorkflowStatus {
 pub struct WorkflowSummary {
     pub workflow_id: String,
     pub run_id: String,
-    pub workflow_type: String,
+    pub workflow_type: Arc<str>,
     pub status: WorkflowStatus,
     pub start_time: DateTime<Utc>,
     pub close_time: Option<DateTime<Utc>>,
-    pub task_queue: String,
+    pub task_queue: Arc<str>,
 }
 
 /// Detailed workflow information (from describe/show commands)

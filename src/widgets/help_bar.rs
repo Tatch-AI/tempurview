@@ -19,30 +19,16 @@ impl HelpBar {
                 vec![("Enter", "Apply"), ("Esc", "Cancel")]
             }
             (_, InputMode::DateRangeSelect) => vec![
-                ("1", "1h"),
-                ("2", "6h"),
-                ("3", "24h"),
-                ("4", "3d"),
-                ("5", "7d"),
-                ("6", "30d"),
-                ("0", "Clear"),
-                ("c", "Custom"),
+                ("j/k", "Navigate"),
+                ("Enter", "Select"),
                 ("Esc", "Cancel"),
             ],
             (_, InputMode::DateRangeCustom) => {
                 vec![("Enter", "Apply"), ("Esc", "Cancel")]
             }
-            (View::WorkflowList, InputMode::SortSelect) => vec![
-                ("s", "Status"),
-                ("t", "Type"),
-                ("w", "Workflow ID"),
-                ("d", "Date"),
-                ("Esc", "Cancel"),
-            ],
-            (View::TypeList, InputMode::SortSelect) => vec![
-                ("t", "Type"),
-                ("n", "Total"),
-                ("1-7", "Status col"),
+            (_, InputMode::SortSelect) => vec![
+                ("j/k", "Navigate"),
+                ("Enter", "Select"),
                 ("Esc", "Cancel"),
             ],
             (View::WorkflowList, _) => vec![
@@ -100,9 +86,11 @@ impl HelpBar {
             (View::Insights, _) => vec![
                 ("j/k", "Navigate"),
                 ("Enter", "Details"),
+                ("s", "Sort"),
                 ("/", "Search"),
                 ("n/N", "Next/Prev"),
                 ("Esc", "Back"),
+                ("d", "Date Range"),
                 ("r", "Re-scan"),
                 ("?", "Help"),
             ],

@@ -34,7 +34,7 @@ impl Default for Config {
             temporal_namespace: "default".to_string(),
             temporal_api_key: None,
             refresh_interval: Duration::from_secs(30),
-            default_limit: 50,
+            default_limit: u32::MAX,
             tick_rate: Duration::from_millis(250),
             use_mock: false,
             mock_workflow_count: 100,
@@ -64,9 +64,10 @@ impl Config {
         }
 
         if let Ok(val) = std::env::var("TEMPORAL_TUI_DEFAULT_LIMIT") {
-            config.default_limit = val
+            let v: u32 = val
                 .parse()
                 .map_err(|_| ConfigError::InvalidValue("TEMPORAL_TUI_DEFAULT_LIMIT".into(), val))?;
+            config.default_limit = if v == 0 { u32::MAX } else { v };
         }
 
         if let Ok(val) = std::env::var("TEMPORAL_TUI_TICK_RATE") {
@@ -77,6 +78,12 @@ impl Config {
         }
 
         config.insights = load_insights_config();
+
+        if let Ok(val) = std::env::var("TEMPURVIEW_INSIGHTS_CONCURRENCY") {
+            if let Ok(c) = val.parse::<usize>() {
+                config.insights.concurrency = c;
+            }
+        }
 
         Ok(config)
     }
@@ -113,9 +120,10 @@ impl Config {
                 "--limit" => {
                     i += 1;
                     if i < args.len() {
-                        config.default_limit = args[i].parse().map_err(|_| {
+                        let v: u32 = args[i].parse().map_err(|_| {
                             ConfigError::InvalidValue("--limit".into(), args[i].clone())
                         })?;
+                        config.default_limit = if v == 0 { u32::MAX } else { v };
                     }
                 }
                 _ => {}
@@ -131,7 +139,7 @@ impl Config {
         let mut config = Self::from_env()?;
         config.use_mock = global.mock;
         config.mock_workflow_count = global.mock_count;
-        config.default_limit = global.limit;
+        config.default_limit = if global.limit == 0 { u32::MAX } else { global.limit };
         if let Some(ref addr) = global.address {
             config.temporal_address = addr.clone();
         }
@@ -152,6 +160,8 @@ struct ConfigFile {
 struct InsightsSection {
     #[serde(default)]
     allowlist: Vec<String>,
+    #[serde(default)]
+    concurrency: Option<usize>,
 }
 
 fn load_insights_config() -> InsightsConfig {
@@ -170,9 +180,16 @@ fn load_insights_config_from(path: &std::path::Path) -> InsightsConfig {
     };
 
     match toml::from_str::<ConfigFile>(&content) {
-        Ok(cf) => InsightsConfig {
-            allowlist: cf.insights.allowlist,
-        },
+        Ok(cf) => {
+            let mut config = InsightsConfig {
+                allowlist: cf.insights.allowlist,
+                ..InsightsConfig::default()
+            };
+            if let Some(c) = cf.insights.concurrency {
+                config.concurrency = c;
+            }
+            config
+        }
         Err(e) => {
             warn!("Failed to parse {}: {}", path.display(), e);
             InsightsConfig::default()

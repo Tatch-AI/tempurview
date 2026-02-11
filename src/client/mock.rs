@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use rand::Rng;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 /// Mock client for testing UI without Temporal
@@ -38,7 +39,7 @@ impl MockTemporalClient {
         let mut rng = rand::thread_rng();
         let mut workflows = Vec::with_capacity(count);
 
-        let workflow_types = [
+        let workflow_types: Vec<Arc<str>> = [
             "EmailGenerationWorkflow",
             "DataProcessingWorkflow",
             "UserOnboardingWorkflow",
@@ -46,15 +47,22 @@ impl MockTemporalClient {
             "NotificationWorkflow",
             "PaymentProcessingWorkflow",
             "InventoryUpdateWorkflow",
-        ];
+        ]
+        .iter()
+        .map(|s| Arc::from(*s))
+        .collect();
 
-        let task_queues = ["default", "high-priority", "batch-processing", "background"];
+        let task_queues: Vec<Arc<str>> =
+            ["default", "high-priority", "batch-processing", "background"]
+                .iter()
+                .map(|s| Arc::from(*s))
+                .collect();
 
         for i in 0..count {
-            let workflow_type = workflow_types[rng.gen_range(0..workflow_types.len())].to_string();
+            let workflow_type = workflow_types[rng.gen_range(0..workflow_types.len())].clone();
 
             // PaymentProcessing: ~65% failure rate for insights "high failure rate" finding
-            let status = if workflow_type == "PaymentProcessingWorkflow" {
+            let status = if &*workflow_type == "PaymentProcessingWorkflow" {
                 match rng.gen_range(0..100) {
                     0..=25 => WorkflowStatus::Completed,
                     26..=35 => WorkflowStatus::Running,
@@ -73,16 +81,16 @@ impl MockTemporalClient {
             };
 
             // Some Running workflows started many hours ago → stuck workflow finding
-            let task_queue = if workflow_type == "DataProcessingWorkflow"
+            let task_queue = if &*workflow_type == "DataProcessingWorkflow"
                 && status == WorkflowStatus::Running
             {
-                "batch-processing".to_string()
+                task_queues[2].clone() // "batch-processing"
             } else {
-                task_queues[rng.gen_range(0..task_queues.len())].to_string()
+                task_queues[rng.gen_range(0..task_queues.len())].clone()
             };
 
             let start_offset = if status == WorkflowStatus::Running
-                && workflow_type == "DataProcessingWorkflow"
+                && &*workflow_type == "DataProcessingWorkflow"
             {
                 // Make DataProcessing running workflows stuck (3-8 hours old)
                 Duration::hours(rng.gen_range(3..9))
@@ -196,7 +204,7 @@ impl TemporalClient for MockTemporalClient {
                     }
                 }
                 if let Some(wf_type) = &filter.workflow_type {
-                    if wf.workflow_type != *wf_type {
+                    if &*wf.workflow_type != wf_type {
                         return false;
                     }
                 }
@@ -284,7 +292,7 @@ impl TemporalClient for MockTemporalClient {
         let mut rng = rand::thread_rng();
 
         // Decision latency for first workflow task: varies by workflow type
-        let first_wt_latency_ms = if workflow.workflow_type == "ReportGenerationWorkflow" {
+        let first_wt_latency_ms = if &*workflow.workflow_type == "ReportGenerationWorkflow" {
             // Slow decision latency for report generation → triggers DecisionLatency finding
             rng.gen_range(600..1500)
         } else {
@@ -296,7 +304,7 @@ impl TemporalClient for MockTemporalClient {
                 event_id: 1,
                 event_type: "WorkflowExecutionStarted".to_string(),
                 timestamp: workflow.start_time,
-                details: serde_json::json!({"workflowType": workflow.workflow_type}),
+                details: serde_json::json!({"workflowType": &*workflow.workflow_type}),
             },
             HistoryEvent {
                 event_id: 2,
@@ -363,7 +371,7 @@ impl TemporalClient for MockTemporalClient {
             }
 
             // Higher queue wait for batch-processing queue to trigger queue latency finding
-            let queue_wait_ms = if workflow.task_queue == "batch-processing" {
+            let queue_wait_ms = if &*workflow.task_queue == "batch-processing" {
                 rng.gen_range(800..2500)
             } else {
                 rng.gen_range(5..200)
@@ -501,7 +509,7 @@ impl TemporalClient for MockTemporalClient {
             let wt_offset = Duration::seconds(rng.gen_range(30..120));
             let wt_sched_ts = workflow.start_time + wt_offset;
             let wt_sched_eid = event_id;
-            let wt_latency_ms = if workflow.workflow_type == "ReportGenerationWorkflow" {
+            let wt_latency_ms = if &*workflow.workflow_type == "ReportGenerationWorkflow" {
                 rng.gen_range(600..1500)
             } else {
                 rng.gen_range(5..100)
@@ -533,7 +541,7 @@ impl TemporalClient for MockTemporalClient {
         }
 
         // Generate signal events for NotificationWorkflow to trigger Signal Storm
-        if workflow.workflow_type == "NotificationWorkflow" {
+        if &*workflow.workflow_type == "NotificationWorkflow" {
             let num_signals = rng.gen_range(50..=300);
             for s in 0..num_signals {
                 events.push(HistoryEvent {
@@ -599,20 +607,20 @@ mod tests {
             WorkflowSummary {
                 workflow_id: "wf-1".to_string(),
                 run_id: "run-1".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Running,
                 start_time: Utc::now(),
                 close_time: None,
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
             WorkflowSummary {
                 workflow_id: "wf-2".to_string(),
                 run_id: "run-2".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Failed,
                 start_time: Utc::now(),
                 close_time: Some(Utc::now()),
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
         ];
 
@@ -638,20 +646,20 @@ mod tests {
             WorkflowSummary {
                 workflow_id: "wf-1".to_string(),
                 run_id: "run-1".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Running,
                 start_time: Utc::now(),
                 close_time: None,
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
             WorkflowSummary {
                 workflow_id: "wf-2".to_string(),
                 run_id: "run-2".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Failed,
                 start_time: Utc::now(),
                 close_time: Some(Utc::now()),
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
         ];
 

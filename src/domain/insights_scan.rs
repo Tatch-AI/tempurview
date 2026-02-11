@@ -1,27 +1,37 @@
-use crate::client::{ClientResult, TemporalClient};
+use crate::action::{Action, DataPayload};
+use crate::client::{ClientError, ClientResult, TemporalClient};
 use crate::domain::{
-    compute_activity_findings, compute_child_workflow_findings, compute_decision_latency_findings,
-    compute_list_findings, compute_scheduling_overhead_findings, compute_signal_findings,
-    correlate_activities, correlate_child_workflows, rank_findings, select_workflows_for_sampling,
-    InsightsConfig, InsightsResult, WorkflowFilter,
+    compute_activity_findings, compute_child_workflow_findings, compute_list_findings,
+    correlate_activities, correlate_child_workflows,
+    finalize_decision_latency_findings, finalize_scheduling_overhead_findings,
+    finalize_signal_findings, rank_findings, select_workflows_for_sampling, InsightCategory,
+    InsightFinding, InsightsConfig, InsightsResult, InsightsScanPhase, WorkflowEventStats,
+    WorkflowFilter, WorkflowSummary,
 };
 use chrono::Utc;
+use futures::stream::{FuturesUnordered, StreamExt};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 /// Run a full insights scan: list workflows, compute list-level findings,
-/// sample histories, compute activity-level findings.
+/// sample histories concurrently, compute activity-level findings.
 ///
 /// Shared between the TUI (via CliWorker) and CLI commands.
 pub async fn run_insights_scan(
-    client: &dyn TemporalClient,
+    client: Arc<dyn TemporalClient>,
     filter: &WorkflowFilter,
     limit: u32,
     config: &InsightsConfig,
+    progress_tx: Option<mpsc::UnboundedSender<Action>>,
+    scan_gen: u64,
 ) -> ClientResult<InsightsResult> {
     info!(
-        "Starting insights scan (limit={}, has_date_range={})",
+        "Starting insights scan (limit={}, has_date_range={}, concurrency={})",
         limit,
-        filter.has_date_range()
+        filter.has_date_range(),
+        config.concurrency,
     );
     let scan_start = Utc::now();
 
@@ -34,47 +44,158 @@ pub async fn run_insights_scan(
         ..WorkflowFilter::new()
     };
 
-    // Step 1: Fetch workflows
-    let workflows = client.list(&date_filter, limit).await?;
+    // Step 1: Fetch workflows (streaming when progress channel available)
+    let workflows = if progress_tx.is_some() {
+        let (page_tx, mut page_rx) = mpsc::unbounded_channel();
+        let client_clone = client.clone();
+        let df = date_filter.clone();
+        let list_task = tokio::spawn(async move {
+            client_clone.list_streaming(&df, limit, page_tx).await
+        });
+        let mut all = Vec::new();
+        while let Some(page) = page_rx.recv().await {
+            all.extend(page);
+            if let Some(ref tx) = progress_tx {
+                let _ = tx.send(Action::DataLoaded(DataPayload::InsightsProgress(
+                    InsightsScanPhase::FetchingWorkflows { fetched: all.len() },
+                    scan_gen,
+                )));
+            }
+        }
+        match list_task.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e),
+            Err(e) => return Err(ClientError::CommandFailed(e.to_string())),
+        }
+        all
+    } else {
+        client.list(&date_filter, limit).await?
+    };
     let workflows_scanned = workflows.len();
     info!("Insights - fetched {} workflows", workflows_scanned);
 
     // Step 2: Compute list-level findings
     let mut all_findings = compute_list_findings(&workflows);
 
-    // Step 3: Select workflows for history sampling (all workflows, priority-ordered)
-    let samples_to_fetch =
-        select_workflows_for_sampling(&workflows, workflows.len());
+    // Send partial result with list-level findings so UI can render them immediately
+    if let Some(ref tx) = progress_tx {
+        let partial = InsightsResult {
+            findings: rank_findings(all_findings.clone()),
+            workflows_scanned,
+            histories_fetched: 0,
+            computed_at: Utc::now(),
+            scan_duration: Utc::now() - scan_start,
+        };
+        let _ = tx.send(Action::DataLoaded(DataPayload::InsightsPartial(partial, scan_gen)));
+    }
 
-    // Step 4: Fetch histories and correlate activities + child workflows + raw events
+    // Step 3: Select workflows for history sampling (all workflows, priority-ordered)
+    let samples_to_fetch = select_workflows_for_sampling(&workflows, workflows.len());
+    let total_to_fetch = samples_to_fetch.len();
+
+    // Step 4: Fetch histories concurrently, streaming results
     let mut activity_samples: Vec<(String, Vec<crate::domain::ActivityExecution>)> = Vec::new();
     let mut child_wf_samples: Vec<(String, Vec<crate::domain::ChildWorkflowExecution>)> =
         Vec::new();
-    let mut event_samples: Vec<(String, Vec<crate::domain::HistoryEvent>)> = Vec::new();
-    for wf in &samples_to_fetch {
-        match client
-            .get_history(&wf.workflow_id, Some(&wf.run_id))
-            .await
-        {
+    let mut event_stats: Vec<WorkflowEventStats> = Vec::new();
+    let mut scanned_count: usize = 0;
+
+    // Create a stream of concurrent futures with bounded concurrency
+    let concurrency = config.concurrency.max(1);
+
+    type HistoryFuture = std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = (String, ClientResult<Vec<crate::domain::HistoryEvent>>),
+                > + Send,
+        >,
+    >;
+
+    let spawn_fetch = |client: Arc<dyn TemporalClient>, wf_id: String, run_id: String| -> HistoryFuture {
+        Box::pin(async move {
+            let result = client.get_history(&wf_id, Some(&run_id)).await;
+            (wf_id, result)
+        })
+    };
+
+    let mut futures: FuturesUnordered<HistoryFuture> = FuturesUnordered::new();
+    let mut pending_iter = samples_to_fetch.into_iter();
+
+    // Seed the initial batch
+    for _ in 0..concurrency {
+        if let Some(wf) = pending_iter.next() {
+            futures.push(spawn_fetch(client.clone(), wf.workflow_id.clone(), wf.run_id.clone()));
+        }
+    }
+
+    while let Some((wf_id, result)) = futures.next().await {
+        // Enqueue the next workflow as soon as one completes
+        if let Some(wf) = pending_iter.next() {
+            futures.push(spawn_fetch(client.clone(), wf.workflow_id.clone(), wf.run_id.clone()));
+        }
+
+        match result {
             Ok(events) => {
+                // Correlate activities and child workflows
                 let activities = correlate_activities(&events);
-                activity_samples.push((wf.workflow_id.clone(), activities));
+                activity_samples.push((wf_id.clone(), activities));
 
                 let child_workflows = correlate_child_workflows(&events);
                 if !child_workflows.is_empty() {
-                    child_wf_samples.push((wf.workflow_id.clone(), child_workflows));
+                    child_wf_samples.push((wf_id.clone(), child_workflows));
                 }
 
-                event_samples.push((wf.workflow_id.clone(), events));
+                // Accumulate event-level stats (streaming — events dropped after this)
+                let mut stats = WorkflowEventStats::new(wf_id);
+                for event in &events {
+                    stats.accumulate(event);
+                }
+                event_stats.push(stats);
             }
             Err(e) => {
                 debug!(
                     "Failed to fetch history for {}: {} (skipping)",
-                    wf.workflow_id, e
+                    wf_id, e
                 );
             }
         }
+
+        scanned_count += 1;
+
+        // Send progress update every workflow
+        if let Some(ref tx) = progress_tx {
+            let _ = tx.send(Action::DataLoaded(DataPayload::InsightsProgress(
+                InsightsScanPhase::SamplingHistories {
+                    scanned: scanned_count,
+                    total: total_to_fetch,
+                },
+                scan_gen,
+            )));
+
+            // Recompute and send partial findings every 100 histories
+            if scanned_count % 100 == 0 {
+                let mut partial_findings = all_findings.clone();
+                partial_findings.extend(compute_activity_findings(&activity_samples, config));
+                partial_findings.extend(compute_child_workflow_findings(&child_wf_samples));
+                partial_findings.extend(finalize_signal_findings(&event_stats));
+                partial_findings.extend(finalize_decision_latency_findings(&event_stats));
+                partial_findings.extend(finalize_scheduling_overhead_findings(&event_stats));
+                enrich_findings(&mut partial_findings, &workflows);
+
+                let partial = InsightsResult {
+                    findings: rank_findings(partial_findings),
+                    workflows_scanned,
+                    histories_fetched: activity_samples.len(),
+                    computed_at: Utc::now(),
+                    scan_duration: Utc::now() - scan_start,
+                };
+                let _ = tx.send(Action::DataLoaded(DataPayload::InsightsPartial(
+                    partial, scan_gen,
+                )));
+            }
+        }
     }
+
     let histories_fetched = activity_samples.len();
     info!(
         "Insights - fetched {} histories ({} with child workflows)",
@@ -90,10 +211,13 @@ pub async fn run_insights_scan(
     let child_wf_findings = compute_child_workflow_findings(&child_wf_samples);
     all_findings.extend(child_wf_findings);
 
-    // Step 5c: Compute event-level findings (signal storm, decision latency, scheduling overhead)
-    all_findings.extend(compute_signal_findings(&event_samples));
-    all_findings.extend(compute_decision_latency_findings(&event_samples));
-    all_findings.extend(compute_scheduling_overhead_findings(&event_samples));
+    // Step 5c: Compute event-level findings from accumulated stats (streaming)
+    all_findings.extend(finalize_signal_findings(&event_stats));
+    all_findings.extend(finalize_decision_latency_findings(&event_stats));
+    all_findings.extend(finalize_scheduling_overhead_findings(&event_stats));
+
+    // Step 5d: Enrich findings with workflow_type and last_observed from workflow data
+    enrich_findings(&mut all_findings, &workflows);
 
     // Step 6: Rank all findings
     let findings = rank_findings(all_findings);
@@ -116,4 +240,59 @@ pub async fn run_insights_scan(
     );
 
     Ok(result)
+}
+
+/// Enrich findings with `workflow_type` and `last_observed` from workflow summary data.
+/// Findings that already have these fields set (e.g., list-level findings) are left as-is.
+fn enrich_findings(findings: &mut [InsightFinding], workflows: &[WorkflowSummary]) {
+    let wf_lookup: HashMap<&str, &WorkflowSummary> = workflows
+        .iter()
+        .map(|w| (w.workflow_id.as_str(), w))
+        .collect();
+
+    for finding in findings.iter_mut() {
+        // Skip if already populated
+        if finding.workflow_type.is_some() && finding.last_observed.is_some() {
+            continue;
+        }
+
+        match finding.category {
+            // Queue-based findings: affected_entities are queue names, not workflow IDs
+            InsightCategory::QueueLatency | InsightCategory::SchedulingOverhead => {}
+            // Decision latency: affected_entities contain the workflow type itself
+            InsightCategory::DecisionLatency => {
+                // workflow_type already set by compute function
+            }
+            _ => {
+                // affected_entities are workflow IDs — look them up
+                let mut types: HashMap<&str, usize> = HashMap::new();
+                let mut latest = finding.last_observed;
+                for entity in &finding.affected_entities {
+                    if let Some(wf) = wf_lookup.get(entity.as_str()) {
+                        *types.entry(&*wf.workflow_type).or_default() += 1;
+                        let t = wf.close_time.unwrap_or(wf.start_time);
+                        if latest.map_or(true, |prev| t > prev) {
+                            latest = Some(t);
+                        }
+                    }
+                }
+                if finding.workflow_type.is_none() && !types.is_empty() {
+                    if types.len() == 1 {
+                        finding.workflow_type =
+                            types.into_keys().next().map(|s| s.to_string());
+                    } else {
+                        // Pick the most common workflow type
+                        let top = types
+                            .iter()
+                            .max_by_key(|(_, count)| **count)
+                            .map(|(t, _)| t.to_string());
+                        finding.workflow_type = top;
+                    }
+                }
+                if finding.last_observed.is_none() {
+                    finding.last_observed = latest;
+                }
+            }
+        }
+    }
 }

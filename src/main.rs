@@ -1,7 +1,7 @@
 use clap::Parser;
 
 use tempurview::action::Action;
-use tempurview::app::{App, Effect, InputMode, View};
+use tempurview::app::{App, Effect, InputMode, LoadState, View};
 use tempurview::cli::Cli;
 use tempurview::cli_worker::{CliHandle, CliRequest, CliWorker};
 use tempurview::client::{GrpcTemporalClient, MockTemporalClient, TemporalClient};
@@ -14,8 +14,8 @@ use tempurview::tui::Tui;
 use tempurview::app::TimelineItemRef;
 use tempurview::widgets::{
     ActivityDetailWidget, ActivityListWidget, EventDetailWidget, EventLogWidget, FilterInput,
-    HelpBar, HelpOverlay, InsightDetailWidget, InsightsWidget, StatusDashboard, TypeListWidget,
-    WorkflowDetailWidget, WorkflowListWidget,
+    HelpBar, HelpOverlay, InsightDetailWidget, InsightsWidget, PickerWidget, StatusDashboard,
+    TypeListWidget, WorkflowDetailWidget, WorkflowListWidget,
 };
 
 use ratatui::{
@@ -182,7 +182,7 @@ async fn main() -> color_eyre::Result<()> {
                             Box::pin(async move {
                                 commands::insight::handle_to(
                                     action,
-                                    client.as_ref(),
+                                    client,
                                     format,
                                     config.default_limit,
                                     &config,
@@ -195,7 +195,7 @@ async fn main() -> color_eyre::Result<()> {
                     } else {
                         commands::insight::handle(
                             action,
-                            client.as_ref(),
+                            client.clone(),
                             format,
                             config.default_limit,
                             &config,
@@ -336,15 +336,16 @@ async fn run_tui(config: Config) -> color_eyre::Result<()> {
     let cli_handle = CliHandle::new(request_tx);
 
     // Initial data load - load both counts and workflows
-    cli_handle.load_counts();
-    cli_handle.load_workflows(app.filter.clone(), config.default_limit);
+    cli_handle.load_counts(app.filter.clone());
+    app.workflows_load_gen += 1;
+    cli_handle.load_workflows(app.filter.clone(), config.default_limit, app.workflows_load_gen);
 
     // Main loop
     loop {
         // Render
-        tui.terminal().draw(|frame| render(&app, frame))?;
+        tui.terminal().draw(|frame| render(&mut app, frame))?;
 
-        // Handle events
+        // Wait for at least one event or action (blocks until something arrives)
         tokio::select! {
             Some(event) = events.next() => {
                 debug!("Event received: {:?}", event);
@@ -360,6 +361,13 @@ async fn run_tui(config: Config) -> color_eyre::Result<()> {
                 let effects = app.update(action);
                 handle_effects(effects, &cli_handle, &app, config.default_limit, &action_tx);
             }
+        }
+
+        // Drain all remaining pending actions before re-rendering.
+        // This batches streaming pages and stale ticks into one render cycle.
+        while let Ok(action) = action_rx.try_recv() {
+            let effects = app.update(action);
+            handle_effects(effects, &cli_handle, &app, config.default_limit, &action_tx);
         }
 
         if app.should_quit {
@@ -473,7 +481,7 @@ fn show_logs_info() {
     }
 }
 
-fn render(app: &App, frame: &mut Frame) {
+fn render(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
 
     // Main layout
@@ -558,7 +566,17 @@ fn render(app: &App, frame: &mut Frame) {
     // Render main content based on view
     match app.view {
         View::WorkflowList => {
-            let mut table_state = app.table_state.clone();
+            let filtered = if app.search_query.is_some() && !app.search_filtered_indices.is_empty()
+            {
+                Some(app.search_filtered_indices.as_slice())
+            } else {
+                None
+            };
+            let total_count = if let LoadState::Loaded(ref counts) = app.status_counts {
+                Some(counts.total())
+            } else {
+                None
+            };
             frame.render_stateful_widget(
                 WorkflowListWidget::new(
                     &app.workflows,
@@ -567,20 +585,27 @@ fn render(app: &App, frame: &mut Frame) {
                     &app.workflow_sort,
                 )
                 .date_label(app.active_date_range_label.as_deref())
-                .search_query(app.search_query.as_deref()),
+                .filtered_indices(filtered)
+                .loading(app.workflows_loading)
+                .total_count(total_count),
                 layout[3],
-                &mut table_state,
+                &mut app.table_state,
             );
         }
         View::TypeList => {
-            let mut table_state = app.type_table_state.clone();
+            let filtered = if app.search_query.is_some() && !app.search_filtered_indices.is_empty()
+            {
+                Some(app.search_filtered_indices.as_slice())
+            } else {
+                None
+            };
             frame.render_stateful_widget(
                 TypeListWidget::new(&app.type_stats, &app.type_sort)
                     .date_label(app.active_date_range_label.as_deref())
                     .name_filter(app.type_name_filter.as_deref())
-                    .search_query(app.search_query.as_deref()),
+                    .filtered_indices(filtered),
                 layout[3],
-                &mut table_state,
+                &mut app.type_table_state,
             );
         }
         View::WorkflowDetail => {
@@ -596,17 +621,23 @@ fn render(app: &App, frame: &mut Frame) {
             }
         }
         View::ActivityList => {
-            let mut table_state = app.activity_table_state.clone();
+            let filtered = if app.search_query.is_some() && !app.search_filtered_indices.is_empty()
+            {
+                Some(app.search_filtered_indices.as_slice())
+            } else {
+                None
+            };
+            let expanded = app.activity_table_state.selected();
             frame.render_stateful_widget(
                 ActivityListWidget::new(
                     &app.activity_events,
                     &app.activities,
                     &app.child_workflows,
                 )
-                .expanded(app.activity_table_state.selected())
-                .search_query(app.search_query.as_deref()),
+                .expanded(expanded)
+                .filtered_indices(filtered),
                 layout[3],
-                &mut table_state,
+                &mut app.activity_table_state,
             );
         }
         View::ActivityDetail => {
@@ -630,12 +661,16 @@ fn render(app: &App, frame: &mut Frame) {
             }
         }
         View::EventLog => {
-            let mut table_state = app.event_log_table_state.clone();
+            let filtered = if app.search_query.is_some() && !app.search_filtered_indices.is_empty()
+            {
+                Some(app.search_filtered_indices.as_slice())
+            } else {
+                None
+            };
             frame.render_stateful_widget(
-                EventLogWidget::new(&app.activity_events)
-                    .search_query(app.search_query.as_deref()),
+                EventLogWidget::new(&app.activity_events).filtered_indices(filtered),
                 layout[3],
-                &mut table_state,
+                &mut app.event_log_table_state,
             );
         }
         View::EventDetail => {
@@ -651,12 +686,20 @@ fn render(app: &App, frame: &mut Frame) {
             }
         }
         View::Insights => {
-            let mut table_state = app.insights_table_state.clone();
+            let filtered = if app.search_query.is_some() && !app.search_filtered_indices.is_empty()
+            {
+                Some(app.search_filtered_indices.as_slice())
+            } else {
+                None
+            };
             frame.render_stateful_widget(
                 InsightsWidget::new(&app.insights)
-                    .search_query(app.search_query.as_deref()),
+                    .filtered_indices(filtered)
+                    .progress(app.insights_progress.as_ref())
+                    .scanning(app.insights_scanning)
+                    .date_label(app.active_date_range_label.as_deref()),
                 layout[3],
-                &mut table_state,
+                &mut app.insights_table_state,
             );
         }
         View::InsightDetail => {
@@ -690,6 +733,11 @@ fn render(app: &App, frame: &mut Frame) {
 
     // Render help bar
     frame.render_widget(HelpBar::for_view(app.view, app.input_mode), layout[4]);
+
+    // Render picker overlay if active
+    if let Some(ref picker) = app.picker {
+        frame.render_widget(PickerWidget::new(picker), area);
+    }
 
     // Render error if present
     if let Some(ref error) = app.last_error {
@@ -763,24 +811,14 @@ fn handle_effects(
 ) {
     for effect in effects {
         match effect {
-            Effect::LoadCounts => {
-                cli_handle.load_counts();
+            Effect::LoadCounts { filter } => {
+                cli_handle.load_counts(filter);
             }
-            Effect::LoadWorkflows => {
-                let effective_limit = if app.filter.has_date_range() {
-                    default_limit.max(1000)
-                } else {
-                    default_limit
-                };
-                cli_handle.load_workflows(app.filter.clone(), effective_limit);
+            Effect::LoadWorkflows { gen } => {
+                cli_handle.load_workflows(app.filter.clone(), default_limit, gen);
             }
             Effect::LoadTypeStats => {
-                let effective_limit = if app.filter.has_date_range() {
-                    500_u32.max(1000)
-                } else {
-                    500
-                };
-                cli_handle.load_type_stats(app.filter.clone(), effective_limit);
+                cli_handle.load_type_stats(app.filter.clone(), default_limit);
             }
             Effect::LoadWorkflowDetail(id, run_id) => {
                 cli_handle.load_detail(id, run_id);
@@ -788,8 +826,8 @@ fn handle_effects(
             Effect::LoadHistory(workflow_id, run_id) => {
                 cli_handle.load_history(workflow_id, run_id);
             }
-            Effect::LoadInsights { filter, limit } => {
-                cli_handle.load_insights(filter, limit);
+            Effect::LoadInsights { filter, limit, gen } => {
+                cli_handle.load_insights(filter, limit, gen);
             }
             Effect::CancelWorkflow(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());

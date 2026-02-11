@@ -33,6 +33,7 @@ impl EventHandler {
         let task = tokio::spawn(async move {
             let mut reader = EventStream::new();
             let mut interval = tokio::time::interval(tick_rate);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             loop {
                 let tick = interval.tick();
@@ -82,11 +83,18 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
             _ => None,
         },
         InputMode::SortSelect => match key.code {
-            KeyCode::Esc => Some(Action::CloseSort),
+            KeyCode::Esc => Some(Action::ClosePicker),
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::PickerDown),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::PickerUp),
+            KeyCode::Enter => Some(Action::PickerSelect),
             KeyCode::Char(c) => Some(Action::SortBy(c as u8)),
             _ => None,
         },
         InputMode::DateRangeSelect => match key.code {
+            KeyCode::Esc => Some(Action::ClosePicker),
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::PickerDown),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::PickerUp),
+            KeyCode::Enter => Some(Action::PickerSelect),
             KeyCode::Char('1') => Some(Action::SelectDateRangePreset(DateRangePreset::LastHour)),
             KeyCode::Char('2') => Some(Action::SelectDateRangePreset(DateRangePreset::Last6Hours)),
             KeyCode::Char('3') => {
@@ -97,7 +105,6 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
             KeyCode::Char('6') => Some(Action::SelectDateRangePreset(DateRangePreset::Last30Days)),
             KeyCode::Char('0') => Some(Action::ClearDateRange),
             KeyCode::Char('c') => Some(Action::EnterCustomDateInput),
-            KeyCode::Esc => Some(Action::CloseDateRangeMode),
             _ => None,
         },
         InputMode::DateRangeCustom => match key.code {
@@ -150,11 +157,17 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Home => Some(Action::NavigateTop),
                 KeyCode::End => Some(Action::NavigateBottom),
                 KeyCode::Char('d')
-                    if view == View::WorkflowList || view == View::TypeList =>
+                    if view == View::WorkflowList
+                        || view == View::TypeList
+                        || view == View::Insights =>
                 {
                     Some(Action::EnterDateRangeMode)
                 }
-                KeyCode::Char('s') if view == View::WorkflowList || view == View::TypeList => {
+                KeyCode::Char('s')
+                    if view == View::WorkflowList
+                        || view == View::TypeList
+                        || view == View::Insights =>
+                {
                     Some(Action::EnterSortMode)
                 }
                 KeyCode::Char('T') if view == View::WorkflowList => {
@@ -173,37 +186,37 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                     View::WorkflowDetail | View::EventDetail | View::ActivityDetail => None,
                 },
                 KeyCode::Esc => Some(Action::GoBack),
-                // Status filter shortcuts (number keys)
-                KeyCode::Char('1') => Some(Action::SetStatusFilter(Some(
+                // Status filter shortcuts (number keys) — WorkflowList only
+                KeyCode::Char('1') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Running,
                 ))),
-                KeyCode::Char('2') => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('2') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Completed,
                 ))),
-                KeyCode::Char('3') => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('3') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Failed,
                 ))),
-                KeyCode::Char('4') => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('4') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Canceled,
                 ))),
-                KeyCode::Char('5') => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('5') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Terminated,
                 ))),
-                KeyCode::Char('6') => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('6') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::TimedOut,
                 ))),
-                KeyCode::Char('7') => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('7') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::ContinuedAsNew,
                 ))),
-                KeyCode::Char('0') => Some(Action::ClearFilters),
-                // Cycle through status filters
-                KeyCode::Char(']') => Some(Action::NextStatusFilter),
-                KeyCode::Char('[') => Some(Action::PrevStatusFilter),
-                // Column visibility toggles (F1-F4)
-                KeyCode::F(1) => Some(Action::ToggleColumn(TableColumn::Status)),
-                KeyCode::F(2) => Some(Action::ToggleColumn(TableColumn::Type)),
-                KeyCode::F(3) => Some(Action::ToggleColumn(TableColumn::WorkflowId)),
-                KeyCode::F(4) => Some(Action::ToggleColumn(TableColumn::Started)),
+                KeyCode::Char('0') if view == View::WorkflowList => Some(Action::ClearFilters),
+                // Cycle through status filters — WorkflowList only
+                KeyCode::Char(']') if view == View::WorkflowList => Some(Action::NextStatusFilter),
+                KeyCode::Char('[') if view == View::WorkflowList => Some(Action::PrevStatusFilter),
+                // Column visibility toggles (F1-F4) — WorkflowList only
+                KeyCode::F(1) if view == View::WorkflowList => Some(Action::ToggleColumn(TableColumn::Status)),
+                KeyCode::F(2) if view == View::WorkflowList => Some(Action::ToggleColumn(TableColumn::Type)),
+                KeyCode::F(3) if view == View::WorkflowList => Some(Action::ToggleColumn(TableColumn::WorkflowId)),
+                KeyCode::F(4) if view == View::WorkflowList => Some(Action::ToggleColumn(TableColumn::Started)),
                 // View-specific shortcuts
                 KeyCode::Char('c') if view == View::WorkflowDetail => {
                     Some(Action::CancelWorkflow(String::new())) // ID filled in by app

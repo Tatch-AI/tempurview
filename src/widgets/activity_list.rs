@@ -32,7 +32,7 @@ pub struct ActivityListWidget<'a> {
     activities: &'a [ActivityExecution],
     child_workflows: &'a [ChildWorkflowExecution],
     expanded: Option<usize>,
-    search_query: Option<&'a str>,
+    filtered_indices: Option<&'a [usize]>,
 }
 
 impl<'a> ActivityListWidget<'a> {
@@ -46,7 +46,7 @@ impl<'a> ActivityListWidget<'a> {
             activities,
             child_workflows,
             expanded: None,
-            search_query: None,
+            filtered_indices: None,
         }
     }
 
@@ -55,8 +55,8 @@ impl<'a> ActivityListWidget<'a> {
         self
     }
 
-    pub fn search_query(mut self, query: Option<&'a str>) -> Self {
-        self.search_query = query;
+    pub fn filtered_indices(mut self, indices: Option<&'a [usize]>) -> Self {
+        self.filtered_indices = indices;
         self
     }
 
@@ -71,33 +71,6 @@ impl<'a> ActivityListWidget<'a> {
             items.push(TimelineItem::ChildWorkflow(cw));
         }
         items.sort_by_key(|item| item.sort_key());
-
-        // Apply search filter if set
-        if let Some(query) = self.search_query.filter(|q| !q.is_empty()) {
-            let lower = query.to_lowercase();
-            items.retain(|item| {
-                let text = match item {
-                    TimelineItem::Activity(a) => {
-                        format!(
-                            "{} {} {}",
-                            a.activity_type,
-                            a.activity_id,
-                            a.status.short_name()
-                        )
-                    }
-                    TimelineItem::ChildWorkflow(cw) => {
-                        format!(
-                            "{} {} {}",
-                            cw.workflow_type,
-                            cw.workflow_id,
-                            cw.status.short_name()
-                        )
-                    }
-                };
-                text.to_lowercase().contains(&lower)
-            });
-        }
-
         items
     }
 
@@ -407,7 +380,13 @@ impl StatefulWidget for ActivityListWidget<'_> {
                 let title = self.build_title();
                 let timeline = self.build_timeline();
 
-                if timeline.is_empty() {
+                // Apply filtered_indices if provided
+                let effective_len = match self.filtered_indices {
+                    Some(indices) => indices.len(),
+                    None => timeline.len(),
+                };
+
+                if effective_len == 0 {
                     let empty = Paragraph::new("No activities found in workflow history")
                         .style(Style::default().add_modifier(Modifier::DIM))
                         .block(
@@ -421,13 +400,36 @@ impl StatefulWidget for ActivityListWidget<'_> {
 
                 // If we have an expanded item, we render the table and detail manually
                 if let Some(expanded_idx) = self.expanded {
+                    // For expanded mode, build all visible rows (activity lists are small)
                     self.render_with_expanded(area, buf, state, &title, expanded_idx, &timeline);
                 } else {
                     let header = Self::build_header();
                     let widths = Self::build_widths();
-                    let rows: Vec<Row> = timeline
-                        .iter()
-                        .map(Self::timeline_item_to_row)
+
+                    // Virtual viewport rendering
+                    let viewport_height = area.height.saturating_sub(3) as usize;
+                    let offset = state.offset();
+                    let selected = state.selected().unwrap_or(0);
+
+                    let adjusted_offset = if selected < offset {
+                        selected
+                    } else if viewport_height > 0 && selected >= offset + viewport_height {
+                        selected.saturating_sub(viewport_height - 1)
+                    } else {
+                        offset
+                    };
+                    *state.offset_mut() = adjusted_offset;
+
+                    let end = (adjusted_offset + viewport_height).min(effective_len);
+
+                    let rows: Vec<Row> = (adjusted_offset..end)
+                        .map(|visible_idx| {
+                            let data_idx = match self.filtered_indices {
+                                Some(indices) => indices[visible_idx],
+                                None => visible_idx,
+                            };
+                            Self::timeline_item_to_row(&timeline[data_idx])
+                        })
                         .collect();
 
                     let table = Table::new(rows, widths)
@@ -444,7 +446,11 @@ impl StatefulWidget for ActivityListWidget<'_> {
                         )
                         .highlight_symbol(">> ");
 
-                    StatefulWidget::render(table, area, buf, state);
+                    let mut local_state = TableState::default();
+                    if selected >= adjusted_offset && selected < end {
+                        local_state.select(Some(selected - adjusted_offset));
+                    }
+                    StatefulWidget::render(table, area, buf, &mut local_state);
                 }
             }
             LoadState::Loading => {

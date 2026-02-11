@@ -37,8 +37,8 @@ pub struct GlobalArgs {
     #[arg(long, global = true, default_value_t = 100)]
     pub mock_count: usize,
 
-    /// Maximum workflows to fetch
-    #[arg(long, global = true, default_value_t = 50)]
+    /// Maximum workflows to fetch (0 = unlimited)
+    #[arg(long, global = true, default_value_t = 0)]
     pub limit: u32,
 
     /// Output format (auto-detects: table for TTY, JSON for pipe)

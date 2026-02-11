@@ -7,6 +7,7 @@ use super::{ClientError, ClientResult, TemporalClient};
 use crate::domain::{
     HistoryEvent, WorkflowDetail, WorkflowFilter, WorkflowStatus, WorkflowSummary,
 };
+use tokio::sync::mpsc;
 use crate::proto::{
     self, CountWorkflowExecutionsRequest, DescribeWorkflowExecutionRequest,
     GetWorkflowExecutionHistoryRequest, GetWorkflowExecutionHistoryReverseRequest,
@@ -15,6 +16,8 @@ use crate::proto::{
 };
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::Interceptor;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -235,28 +238,52 @@ impl TemporalClient for GrpcTemporalClient {
         filter: &WorkflowFilter,
         limit: u32,
     ) -> ClientResult<Vec<WorkflowSummary>> {
-        let inner = ListWorkflowExecutionsRequest {
-            namespace: self.namespace.clone(),
-            page_size: limit as i32,
-            next_page_token: vec![],
-            query: filter.to_query().unwrap_or_default(),
-        };
+        let mut all_workflows = Vec::new();
+        let mut next_page_token = vec![];
+        let query = filter.to_query().unwrap_or_default();
+        let page_size = 1000.min(limit) as i32;
+        let mut type_intern: HashMap<Arc<str>, Arc<str>> = HashMap::new();
+        let mut queue_intern: HashMap<Arc<str>, Arc<str>> = HashMap::new();
 
-        let response = self
-            .client
-            .clone()
-            .list_workflow_executions(self.make_request(inner))
-            .await
-            .map_err(grpc_error_to_client_error)?;
+        loop {
+            let inner = ListWorkflowExecutionsRequest {
+                namespace: self.namespace.clone(),
+                page_size,
+                next_page_token: next_page_token.clone(),
+                query: query.clone(),
+            };
 
-        let workflows = response
-            .into_inner()
-            .executions
-            .into_iter()
-            .map(workflow_info_to_summary)
-            .collect::<Result<Vec<_>, _>>()?;
+            let response = self
+                .client
+                .clone()
+                .list_workflow_executions(self.make_request(inner))
+                .await
+                .map_err(grpc_error_to_client_error)?;
 
-        Ok(workflows)
+            let resp = response.into_inner();
+            for info in resp.executions {
+                let mut summary = workflow_info_to_summary(info)?;
+                summary.workflow_type = type_intern
+                    .entry(summary.workflow_type.clone())
+                    .or_insert_with(|| summary.workflow_type.clone())
+                    .clone();
+                summary.task_queue = queue_intern
+                    .entry(summary.task_queue.clone())
+                    .or_insert_with(|| summary.task_queue.clone())
+                    .clone();
+                all_workflows.push(summary);
+                if all_workflows.len() >= limit as usize {
+                    return Ok(all_workflows);
+                }
+            }
+
+            if resp.next_page_token.is_empty() {
+                break;
+            }
+            next_page_token = resp.next_page_token;
+        }
+
+        Ok(all_workflows)
     }
 
     async fn describe(
@@ -324,7 +351,7 @@ impl TemporalClient for GrpcTemporalClient {
                     workflow_id: workflow_id.to_string(),
                     run_id: run_id.unwrap_or("").to_string(),
                 }),
-                maximum_page_size: 200,
+                maximum_page_size: 1000,
                 next_page_token: next_page_token.clone(),
                 wait_new_event: false,
                 history_event_filter_type: 0, // HISTORY_EVENT_FILTER_TYPE_ALL_EVENT
@@ -413,6 +440,67 @@ impl TemporalClient for GrpcTemporalClient {
 
         Ok(())
     }
+
+    async fn list_streaming(
+        &self,
+        filter: &WorkflowFilter,
+        limit: u32,
+        page_tx: mpsc::UnboundedSender<Vec<WorkflowSummary>>,
+    ) -> ClientResult<()> {
+        let mut next_page_token = vec![];
+        let query = filter.to_query().unwrap_or_default();
+        let page_size = 1000.min(limit) as i32;
+        let mut type_intern: HashMap<Arc<str>, Arc<str>> = HashMap::new();
+        let mut queue_intern: HashMap<Arc<str>, Arc<str>> = HashMap::new();
+        let mut total_count = 0usize;
+
+        loop {
+            let inner = ListWorkflowExecutionsRequest {
+                namespace: self.namespace.clone(),
+                page_size,
+                next_page_token: next_page_token.clone(),
+                query: query.clone(),
+            };
+
+            let response = self
+                .client
+                .clone()
+                .list_workflow_executions(self.make_request(inner))
+                .await
+                .map_err(grpc_error_to_client_error)?;
+
+            let resp = response.into_inner();
+            let mut page_batch = Vec::with_capacity(resp.executions.len());
+
+            for info in resp.executions {
+                let mut summary = workflow_info_to_summary(info)?;
+                summary.workflow_type = type_intern
+                    .entry(summary.workflow_type.clone())
+                    .or_insert_with(|| summary.workflow_type.clone())
+                    .clone();
+                summary.task_queue = queue_intern
+                    .entry(summary.task_queue.clone())
+                    .or_insert_with(|| summary.task_queue.clone())
+                    .clone();
+                page_batch.push(summary);
+                total_count += 1;
+                if total_count >= limit as usize {
+                    let _ = page_tx.send(page_batch);
+                    return Ok(());
+                }
+            }
+
+            if !page_batch.is_empty() {
+                let _ = page_tx.send(page_batch);
+            }
+
+            if resp.next_page_token.is_empty() {
+                break;
+            }
+            next_page_token = resp.next_page_token;
+        }
+        Ok(())
+    }
 }
 
 /// Convert gRPC status to our ClientError
@@ -435,10 +523,12 @@ fn workflow_info_to_summary(
         .execution
         .ok_or_else(|| ClientError::ParseError("Missing execution".into()))?;
 
-    let workflow_type = info
-        .r#type
-        .map(|t| t.name)
-        .unwrap_or_else(|| "Unknown".to_string());
+    let workflow_type: Arc<str> = Arc::from(
+        info.r#type
+            .map(|t| t.name)
+            .unwrap_or_else(|| "Unknown".to_string())
+            .as_str(),
+    );
 
     let status = proto_status_to_domain(info.status);
 
@@ -456,7 +546,7 @@ fn workflow_info_to_summary(
         status,
         start_time,
         close_time,
-        task_queue: info.task_queue,
+        task_queue: Arc::from(info.task_queue.as_str()),
     })
 }
 

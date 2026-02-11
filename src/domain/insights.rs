@@ -93,6 +93,12 @@ pub struct InsightFinding {
     pub computed_at: DateTime<Utc>,
     /// The specific values that triggered this finding, used for highlighting in the detail view
     pub trigger_terms: Vec<String>,
+    /// The workflow type associated with this finding (when applicable)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_type: Option<String>,
+    /// When the issue was most recently observed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_observed: Option<DateTime<Utc>>,
 }
 
 /// Result of an insights scan
@@ -115,12 +121,23 @@ fn serde_timedelta_ms<S: serde::Serializer>(
 
 /// User-configurable settings for insights analysis.
 /// Loaded from ~/.tempurview/config.toml [insights] section.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct InsightsConfig {
     /// Phrases that suppress error-pattern matches (case-insensitive).
     /// If any allowlisted phrase appears in the same text as an error pattern,
     /// the match is skipped.
     pub allowlist: Vec<String>,
+    /// Max concurrent history fetches during insights scan (default 50).
+    pub concurrency: usize,
+}
+
+impl Default for InsightsConfig {
+    fn default() -> Self {
+        Self {
+            allowlist: Vec::new(),
+            concurrency: 50,
+        }
+    }
 }
 
 impl InsightsConfig {
@@ -130,6 +147,23 @@ impl InsightsConfig {
             .iter()
             .any(|phrase| text_lower.contains(phrase.to_lowercase().as_str()))
     }
+}
+
+/// Phase of an insights scan, used for progress reporting
+#[derive(Debug, Clone, PartialEq)]
+pub enum InsightsScanPhase {
+    FetchingWorkflows { fetched: usize },
+    SamplingHistories { scanned: usize, total: usize },
+}
+
+/// Columns available for sorting in the Insights view
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsightSortColumn {
+    Severity,
+    Category,
+    Type,
+    LastSeen,
+    Affected,
 }
 
 /// Threshold constants for insight detection
@@ -251,6 +285,7 @@ mod tests {
     fn test_allowlist_matches_case_insensitive() {
         let config = InsightsConfig {
             allowlist: vec!["errors and omissions".to_string()],
+            ..InsightsConfig::default()
         };
         assert!(config.is_allowlisted("reviewing errors and omissions policy"));
         assert!(config.is_allowlisted("reviewing Errors and Omissions policy"));
@@ -261,6 +296,7 @@ mod tests {
     fn test_allowlist_no_match() {
         let config = InsightsConfig {
             allowlist: vec!["errors and omissions".to_string()],
+            ..InsightsConfig::default()
         };
         assert!(!config.is_allowlisted("there was an error in processing"));
     }

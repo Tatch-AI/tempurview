@@ -1,10 +1,11 @@
 use crate::action::{Action, DataPayload, TableColumn};
 use crate::domain::{
     correlate_activities, correlate_child_workflows, highlight_search_matches, parse_date_input,
-    ActivityExecution, ChildWorkflowExecution, HistoryEvent, InsightsResult, SortDirection,
-    StatusCounts, TypeListColumn, TypeStat, WorkflowDetail, WorkflowFilter, WorkflowStatus,
-    WorkflowSummary,
+    ActivityExecution, ChildWorkflowExecution, DateRangePreset, HistoryEvent, InsightSortColumn,
+    InsightsResult, InsightsScanPhase, SortDirection, StatusCounts, TypeListColumn, TypeStat,
+    WorkflowDetail, WorkflowFilter, WorkflowStatus, WorkflowSummary,
 };
+use crate::picker::{PickerItem, PickerState};
 use ratatui::widgets::TableState;
 use std::collections::HashSet;
 use std::time::Instant;
@@ -69,6 +70,15 @@ impl<T> LoadState<T> {
     }
 }
 
+/// Saved search state for restoring when navigating back
+struct SavedSearch {
+    query: Option<String>,
+    input: String,
+    filtered_indices: Vec<usize>,
+    match_lines: Vec<usize>,
+    current_match: usize,
+}
+
 /// Main application state
 pub struct App {
     // View state
@@ -98,6 +108,10 @@ pub struct App {
     // Sort state
     pub workflow_sort: Option<(TableColumn, SortDirection)>,
     pub type_sort: Option<(TypeListColumn, SortDirection)>,
+    pub insights_sort: Option<(InsightSortColumn, SortDirection)>,
+
+    // Picker overlay
+    pub picker: Option<PickerState>,
 
     // TypeList state
     pub type_stats: LoadState<Vec<TypeStat>>,
@@ -126,12 +140,21 @@ pub struct App {
     pub search_current_match: usize,
     /// For list views: indices of rows matching the search query
     pub search_filtered_indices: Vec<usize>,
+    /// Stack of saved search states (parallel to view_stack)
+    saved_searches: Vec<SavedSearch>,
 
     // Insights state
     pub insights: LoadState<InsightsResult>,
     pub insights_table_state: TableState,
     pub insight_detail_scroll: u16,
     pub insight_entity_index: usize,
+    pub insights_progress: Option<InsightsScanPhase>,
+    pub insights_scanning: bool,
+    pub insights_scan_gen: u64,
+
+    // Streaming state
+    pub workflows_loading: bool,
+    pub workflows_load_gen: u64,
 
     // Config
     pub temporal_namespace: String,
@@ -180,6 +203,9 @@ impl App {
 
             workflow_sort: None,
             type_sort: None,
+            insights_sort: None,
+
+            picker: None,
 
             type_stats: LoadState::NotLoaded,
             type_table_state: TableState::default().with_selected(0),
@@ -201,11 +227,18 @@ impl App {
             search_match_lines: Vec::new(),
             search_current_match: 0,
             search_filtered_indices: Vec::new(),
+            saved_searches: Vec::new(),
 
             insights: LoadState::NotLoaded,
             insights_table_state: TableState::default().with_selected(0),
             insight_detail_scroll: 0,
             insight_entity_index: 0,
+            insights_progress: None,
+            insights_scanning: false,
+            insights_scan_gen: 0,
+
+            workflows_loading: false,
+            workflows_load_gen: 0,
 
             temporal_namespace: String::new(),
 
@@ -298,13 +331,16 @@ impl App {
                             let name = type_name.to_string();
                             // Pop back to wherever we came from (should be WorkflowList)
                             if let Some(prev_view) = self.view_stack.pop() {
+                                self.pop_search_state();
                                 self.view = prev_view;
                             } else {
                                 self.view = View::WorkflowList;
                             }
                             self.filter.workflow_type = Some(name);
                             self.table_state.select(Some(0));
-                            vec![Effect::LoadWorkflows]
+                            self.workflows = LoadState::Loading;
+                            self.workflows_loading = false;
+                            vec![self.load_workflows_effect()]
                         } else {
                             vec![]
                         }
@@ -323,9 +359,9 @@ impl App {
                                 {
                                     let id = entity.clone();
                                     self.view_stack.push(self.view);
+                                    self.push_search_state();
                                     self.view = View::WorkflowDetail;
                                     self.selected_workflow = Some(LoadState::Loading);
-                                    self.clear_search_state();
                                     return vec![Effect::LoadWorkflowDetail(id, None)];
                                 }
                             }
@@ -338,9 +374,9 @@ impl App {
                             let run_id =
                                 self.selected_workflow_run_id().map(|s| s.to_string());
                             self.view_stack.push(self.view);
+                            self.push_search_state();
                             self.view = View::WorkflowDetail;
                             self.selected_workflow = Some(LoadState::Loading);
-                            self.clear_search_state();
                             vec![Effect::LoadWorkflowDetail(id, run_id)]
                         } else {
                             vec![]
@@ -355,11 +391,13 @@ impl App {
                 } else if self.input_mode == InputMode::PendingG {
                     self.input_mode = InputMode::Normal;
                 } else if self.input_mode == InputMode::DateRangeSelect {
+                    self.picker = None;
                     self.input_mode = InputMode::Normal;
                 } else if self.input_mode == InputMode::DateRangeCustom {
                     self.input_mode = InputMode::Normal;
                     self.date_range_input.clear();
                 } else if self.input_mode == InputMode::SortSelect {
+                    self.picker = None;
                     self.input_mode = InputMode::Normal;
                 } else if self.input_mode == InputMode::FilterInput {
                     self.input_mode = InputMode::Normal;
@@ -377,7 +415,7 @@ impl App {
                         self.search_match_lines.clear();
                         self.search_current_match = 0;
                     } else if let Some(prev_view) = self.view_stack.pop() {
-                        self.clear_search_state();
+                        self.pop_search_state();
                         match self.view {
                             View::ActivityDetail => self.activity_detail_scroll = 0,
                             View::EventDetail => self.event_detail_scroll = 0,
@@ -390,6 +428,7 @@ impl App {
                     // List views: first Esc clears search
                     self.clear_search_state();
                 } else if let Some(prev_view) = self.view_stack.pop() {
+                    self.pop_search_state();
                     if self.view == View::ActivityList {
                         self.activity_events = LoadState::NotLoaded;
                         self.activities.clear();
@@ -406,7 +445,7 @@ impl App {
                     }
                     self.view = prev_view;
                 } else if self.view == View::WorkflowDetail {
-                    self.clear_search_state();
+                    self.pop_search_state();
                     self.view = View::WorkflowList;
                     self.selected_workflow = None;
                 }
@@ -415,12 +454,16 @@ impl App {
             Action::SetStatusFilter(status) => {
                 self.filter.status = status;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                self.workflows = LoadState::Loading;
+                self.workflows_loading = false;
+                vec![self.load_workflows_effect()]
             }
             Action::SetTypeFilter(workflow_type) => {
                 self.filter.workflow_type = workflow_type;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                self.workflows = LoadState::Loading;
+                self.workflows_loading = false;
+                vec![self.load_workflows_effect()]
             }
             Action::NextStatusFilter => {
                 let statuses = WorkflowStatus::all();
@@ -434,7 +477,9 @@ impl App {
                 };
                 self.filter.status = next_status;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                self.workflows = LoadState::Loading;
+                self.workflows_loading = false;
+                vec![self.load_workflows_effect()]
             }
             Action::PrevStatusFilter => {
                 let statuses = WorkflowStatus::all();
@@ -452,7 +497,9 @@ impl App {
                 };
                 self.filter.status = prev_status;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                self.workflows = LoadState::Loading;
+                self.workflows_loading = false;
+                vec![self.load_workflows_effect()]
             }
             Action::ToggleColumn(column) => {
                 if self.visible_columns.contains(&column) {
@@ -470,7 +517,9 @@ impl App {
                 self.active_date_range_label = None;
                 self.type_name_filter = None;
                 self.table_state.select(Some(0));
-                vec![Effect::LoadWorkflows]
+                self.workflows = LoadState::Loading;
+                self.workflows_loading = false;
+                vec![self.load_workflows_effect()]
             }
             Action::OpenFilterInput => {
                 self.input_mode = InputMode::FilterInput;
@@ -494,7 +543,9 @@ impl App {
                     if !self.filter_input.is_empty() {
                         self.filter = WorkflowFilter::from_query(&self.filter_input);
                         self.filter_input.clear();
-                        vec![Effect::LoadWorkflows]
+                        self.workflows = LoadState::Loading;
+                        self.workflows_loading = false;
+                        vec![self.load_workflows_effect()]
                     } else {
                         vec![]
                     }
@@ -561,14 +612,12 @@ impl App {
                 if self.view == View::ActivityDetail {
                     // Pop back to ActivityList, then reload history
                     if let Some(prev) = self.view_stack.pop() {
+                        self.pop_search_state();
                         self.view = prev;
                     } else {
                         self.view = View::ActivityList;
                     }
                     self.activity_detail_scroll = 0;
-                    self.search_query = None;
-                    self.search_match_lines.clear();
-                    self.search_current_match = 0;
                     if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
                         let wf_id = detail.summary.workflow_id.clone();
                         let run_id = Some(detail.summary.run_id.clone());
@@ -583,14 +632,12 @@ impl App {
                 if self.view == View::EventDetail {
                     // Pop back to EventLog, then reload history
                     if let Some(prev) = self.view_stack.pop() {
+                        self.pop_search_state();
                         self.view = prev;
                     } else {
                         self.view = View::EventLog;
                     }
                     self.event_detail_scroll = 0;
-                    self.search_query = None;
-                    self.search_match_lines.clear();
-                    self.search_current_match = 0;
                     if let Some(LoadState::Loaded(ref detail)) = self.selected_workflow {
                         let wf_id = detail.summary.workflow_id.clone();
                         let run_id = Some(detail.summary.run_id.clone());
@@ -603,11 +650,14 @@ impl App {
                 if self.view == View::Insights || self.view == View::InsightDetail {
                     // Re-run the insights scan
                     self.insights = LoadState::Loading;
+                    self.insights_progress = None;
+                    self.insights_scanning = false;
                     self.insights_table_state.select(Some(0));
                     self.insight_detail_scroll = 0;
                     // If in detail view, go back to list
                     if self.view == View::InsightDetail {
                         if let Some(prev) = self.view_stack.pop() {
+                            self.pop_search_state();
                             self.view = prev;
                         } else {
                             self.view = View::Insights;
@@ -615,9 +665,14 @@ impl App {
                     }
                     return vec![self.load_insights_effect()];
                 }
-                let mut effects = vec![Effect::LoadCounts, Effect::LoadWorkflows];
+                let load_wf = self.load_workflows_effect();
+                let mut effects = vec![
+                    Effect::LoadCounts { filter: self.filter.clone() },
+                    load_wf,
+                ];
                 self.status_counts = LoadState::Loading;
                 self.workflows = LoadState::Loading;
+                self.workflows_loading = false;
                 if self.view == View::TypeList {
                     self.type_stats = LoadState::Loading;
                     effects.push(Effect::LoadTypeStats);
@@ -656,6 +711,7 @@ impl App {
                     let wf_id = detail.summary.workflow_id.clone();
                     let run_id = Some(detail.summary.run_id.clone());
                     self.view_stack.push(self.view);
+                    self.push_search_state();
                     self.view = View::ActivityList;
                     self.activity_events = LoadState::Loading;
                     self.activities.clear();
@@ -689,16 +745,19 @@ impl App {
                 self.activity_table_state.select(Some(data_index));
                 if self.selected_timeline_item().is_some() {
                     self.view_stack.push(self.view);
+                    self.push_search_state();
                     self.view = View::ActivityDetail;
                     self.activity_detail_scroll = 0;
-                    self.clear_search_state();
                 }
                 vec![]
             }
             Action::ViewInsights => {
                 self.view_stack.push(self.view);
+                self.push_search_state();
                 self.view = View::Insights;
                 self.insights = LoadState::Loading;
+                self.insights_progress = None;
+                self.insights_scanning = false;
                 self.insights_table_state.select(Some(0));
                 vec![self.load_insights_effect()]
             }
@@ -710,10 +769,10 @@ impl App {
                             // Update table state to data index before entering detail
                             self.insights_table_state.select(Some(data_index));
                             self.view_stack.push(self.view);
+                            self.push_search_state();
                             self.view = View::InsightDetail;
                             self.insight_detail_scroll = 0;
                             self.insight_entity_index = 0;
-                            self.clear_search_state();
                         }
                     }
                 }
@@ -757,6 +816,7 @@ impl App {
             Action::ViewEventLog => {
                 // Enter event log view reusing already-loaded history or loading fresh
                 self.view_stack.push(self.view);
+                self.push_search_state();
                 self.view = View::EventLog;
                 self.event_log_table_state.select(Some(0));
                 if self.activity_events.is_loaded() {
@@ -780,9 +840,9 @@ impl App {
                             // Update table state to data index before entering detail
                             self.event_log_table_state.select(Some(data_index));
                             self.view_stack.push(self.view);
+                            self.push_search_state();
                             self.view = View::EventDetail;
                             self.event_detail_scroll = 0;
-                            self.clear_search_state();
                         }
                     }
                 }
@@ -902,24 +962,104 @@ impl App {
             }
             Action::ViewTypeList => {
                 self.view_stack.push(self.view);
+                self.push_search_state();
                 self.view = View::TypeList;
                 self.type_stats = LoadState::Loading;
                 self.type_table_state.select(Some(0));
                 vec![Effect::LoadTypeStats]
             }
             Action::EnterSortMode => {
-                self.input_mode = InputMode::SortSelect;
+                let items = match self.view {
+                    View::WorkflowList => vec![
+                        PickerItem { key: 's', label: "Status".into() },
+                        PickerItem { key: 't', label: "Type".into() },
+                        PickerItem { key: 'w', label: "Workflow ID".into() },
+                        PickerItem { key: 'd', label: "Date".into() },
+                    ],
+                    View::TypeList => vec![
+                        PickerItem { key: 't', label: "Type Name".into() },
+                        PickerItem { key: 'n', label: "Total".into() },
+                        PickerItem { key: '1', label: "Running".into() },
+                        PickerItem { key: '2', label: "Completed".into() },
+                        PickerItem { key: '3', label: "Failed".into() },
+                        PickerItem { key: '4', label: "Canceled".into() },
+                        PickerItem { key: '5', label: "Terminated".into() },
+                        PickerItem { key: '6', label: "TimedOut".into() },
+                        PickerItem { key: '7', label: "ContinuedAsNew".into() },
+                    ],
+                    View::Insights => vec![
+                        PickerItem { key: 's', label: "Severity".into() },
+                        PickerItem { key: 'c', label: "Category".into() },
+                        PickerItem { key: 't', label: "Type".into() },
+                        PickerItem { key: 'l', label: "Last Seen".into() },
+                        PickerItem { key: 'a', label: "Affected".into() },
+                    ],
+                    _ => vec![],
+                };
+                if !items.is_empty() {
+                    self.picker = Some(PickerState::new("Sort By", items));
+                    self.input_mode = InputMode::SortSelect;
+                }
                 vec![]
             }
-            Action::CloseSort => {
+            Action::ClosePicker => {
+                self.picker = None;
                 self.input_mode = InputMode::Normal;
                 vec![]
             }
+            Action::PickerUp => {
+                if let Some(ref mut picker) = self.picker {
+                    picker.move_up();
+                }
+                vec![]
+            }
+            Action::PickerDown => {
+                if let Some(ref mut picker) = self.picker {
+                    picker.move_down();
+                }
+                vec![]
+            }
+            Action::PickerSelect => {
+                let mode = self.input_mode;
+                if let Some(ref picker) = self.picker {
+                    if let Some(key) = picker.selected_key() {
+                        self.picker = None;
+                        let action = match mode {
+                            InputMode::DateRangeSelect => match key {
+                                '1' => Action::SelectDateRangePreset(DateRangePreset::LastHour),
+                                '2' => Action::SelectDateRangePreset(DateRangePreset::Last6Hours),
+                                '3' => Action::SelectDateRangePreset(DateRangePreset::Last24Hours),
+                                '4' => Action::SelectDateRangePreset(DateRangePreset::Last3Days),
+                                '5' => Action::SelectDateRangePreset(DateRangePreset::Last7Days),
+                                '6' => Action::SelectDateRangePreset(DateRangePreset::Last30Days),
+                                '0' => Action::ClearDateRange,
+                                'c' => Action::EnterCustomDateInput,
+                                _ => Action::CloseDateRangeMode,
+                            },
+                            _ => Action::SortBy(key as u8),
+                        };
+                        return self.update(action);
+                    }
+                }
+                vec![]
+            }
             Action::EnterDateRangeMode => {
+                let items = vec![
+                    PickerItem { key: '1', label: "Last Hour".into() },
+                    PickerItem { key: '2', label: "Last 6 Hours".into() },
+                    PickerItem { key: '3', label: "Last 24 Hours".into() },
+                    PickerItem { key: '4', label: "Last 3 Days".into() },
+                    PickerItem { key: '5', label: "Last 7 Days".into() },
+                    PickerItem { key: '6', label: "Last 30 Days".into() },
+                    PickerItem { key: 'c', label: "Custom...".into() },
+                    PickerItem { key: '0', label: "Clear".into() },
+                ];
+                self.picker = Some(PickerState::new("Date Range", items));
                 self.input_mode = InputMode::DateRangeSelect;
                 vec![]
             }
             Action::SelectDateRangePreset(preset) => {
+                self.picker = None;
                 self.filter.start_time_after = Some(chrono::Utc::now() - preset.duration());
                 self.filter.start_time_before = None;
                 self.active_date_range_label = Some(format!("{} ago", preset.short_label()));
@@ -928,6 +1068,7 @@ impl App {
                 self.date_range_reload_effects()
             }
             Action::ClearDateRange => {
+                self.picker = None;
                 self.filter.start_time_after = None;
                 self.filter.start_time_before = None;
                 self.filter.close_time_after = None;
@@ -938,11 +1079,13 @@ impl App {
                 self.date_range_reload_effects()
             }
             Action::EnterCustomDateInput => {
+                self.picker = None;
                 self.input_mode = InputMode::DateRangeCustom;
                 self.date_range_input.clear();
                 vec![]
             }
             Action::CloseDateRangeMode => {
+                self.picker = None;
                 self.input_mode = InputMode::Normal;
                 vec![]
             }
@@ -977,6 +1120,7 @@ impl App {
                 vec![]
             }
             Action::SortBy(key) => {
+                self.picker = None;
                 self.input_mode = InputMode::Normal;
                 match self.view {
                     View::WorkflowList => {
@@ -1033,6 +1177,30 @@ impl App {
                             self.sort_type_stats();
                         }
                     }
+                    View::Insights => {
+                        let column = match key {
+                            b's' => Some(InsightSortColumn::Severity),
+                            b'c' => Some(InsightSortColumn::Category),
+                            b't' => Some(InsightSortColumn::Type),
+                            b'l' => Some(InsightSortColumn::LastSeen),
+                            b'a' => Some(InsightSortColumn::Affected),
+                            _ => None,
+                        };
+                        if let Some(col) = column {
+                            let direction =
+                                if let Some((ref current_col, ref dir)) = self.insights_sort {
+                                    if *current_col == col {
+                                        dir.toggle()
+                                    } else {
+                                        SortDirection::Descending
+                                    }
+                                } else {
+                                    SortDirection::Descending
+                                };
+                            self.insights_sort = Some((col, direction));
+                            self.sort_insights();
+                        }
+                    }
                     _ => {}
                 }
                 vec![]
@@ -1068,21 +1236,65 @@ impl App {
                     DataPayload::Counts(counts) => {
                         self.status_counts = LoadState::Loaded(counts);
                     }
-                    DataPayload::Workflows(wfs) => {
-                        // Only compute counts locally if we don't have API-loaded counts
-                        // API counts are more accurate as they include ALL workflows
-                        if !self.status_counts.is_loaded() {
-                            let counts = StatusCounts::from_workflows(&wfs);
-                            self.status_counts = LoadState::Loaded(counts);
+                    DataPayload::Workflows(wfs, gen) => {
+                        if gen != self.workflows_load_gen {
+                            // Stale result from old load — drop
+                        } else {
+                            if !self.status_counts.is_loaded() {
+                                let counts = StatusCounts::from_workflows(&wfs);
+                                self.status_counts = LoadState::Loaded(counts);
+                            }
+                            self.workflows = LoadState::Loaded(wfs);
+                            self.workflows_loading = false;
+                            self.sort_workflows();
+                            if self.search_query.is_some() {
+                                self.recompute_list_search();
+                            }
+                            if let LoadState::Loaded(ref workflows) = self.workflows {
+                                let selected = self.table_state.selected().unwrap_or(0);
+                                if selected >= workflows.len() && !workflows.is_empty() {
+                                    self.table_state.select(Some(workflows.len() - 1));
+                                }
+                            }
                         }
-
-                        self.workflows = LoadState::Loaded(wfs);
-                        self.sort_workflows();
-                        // Reset selection if it's out of bounds
-                        if let LoadState::Loaded(ref workflows) = self.workflows {
-                            let selected = self.table_state.selected().unwrap_or(0);
-                            if selected >= workflows.len() && !workflows.is_empty() {
-                                self.table_state.select(Some(workflows.len() - 1));
+                    }
+                    DataPayload::WorkflowsPage(page, gen) => {
+                        if gen != self.workflows_load_gen {
+                            // Stale page from old load — drop
+                        } else {
+                            match &mut self.workflows {
+                                LoadState::Loading => {
+                                    self.workflows = LoadState::Loaded(page);
+                                    self.workflows_loading = true;
+                                    self.table_state.select(Some(0));
+                                }
+                                LoadState::Loaded(wfs) if self.workflows_loading => {
+                                    wfs.extend(page);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    DataPayload::WorkflowsDone(gen) => {
+                        if gen != self.workflows_load_gen {
+                            // Stale done from old load — drop
+                        } else {
+                            self.workflows_loading = false;
+                            self.sort_workflows();
+                            if self.search_query.is_some() {
+                                self.recompute_list_search();
+                            }
+                            if !self.status_counts.is_loaded() {
+                                if let LoadState::Loaded(ref wfs) = self.workflows {
+                                    let counts = StatusCounts::from_workflows(wfs);
+                                    self.status_counts = LoadState::Loaded(counts);
+                                }
+                            }
+                            if let LoadState::Loaded(ref wfs) = self.workflows {
+                                let selected = self.table_state.selected().unwrap_or(0);
+                                if selected >= wfs.len() && !wfs.is_empty() {
+                                    self.table_state.select(Some(wfs.len() - 1));
+                                }
                             }
                         }
                     }
@@ -1092,6 +1304,10 @@ impl App {
                     DataPayload::TypeStats(stats) => {
                         self.type_stats = LoadState::Loaded(stats);
                         self.sort_type_stats();
+                        // Recompute search filter against fresh data
+                        if self.search_query.is_some() {
+                            self.recompute_list_search();
+                        }
                         // Reset selection if out of bounds
                         if let LoadState::Loaded(ref ts) = self.type_stats {
                             let selected = self.type_table_state.selected().unwrap_or(0);
@@ -1104,6 +1320,10 @@ impl App {
                         self.activities = correlate_activities(&events);
                         self.child_workflows = correlate_child_workflows(&events);
                         self.activity_events = LoadState::Loaded(events);
+                        // Recompute search filter against fresh data
+                        if self.search_query.is_some() {
+                            self.recompute_list_search();
+                        }
                         // Reset selection if out of bounds (combined length for timeline)
                         let combined_len =
                             self.activities.len() + self.child_workflows.len();
@@ -1122,15 +1342,43 @@ impl App {
                             }
                         }
                     }
-                    DataPayload::Insights(result) => {
-                        self.insights = LoadState::Loaded(result);
-                        // Reset selection if out of bounds
-                        if let LoadState::Loaded(ref r) = self.insights {
-                            let selected = self.insights_table_state.selected().unwrap_or(0);
-                            if selected >= r.findings.len() && !r.findings.is_empty() {
-                                self.insights_table_state
-                                    .select(Some(r.findings.len() - 1));
+                    DataPayload::Insights(result, gen) => {
+                        if gen != self.insights_scan_gen {
+                            // Stale result from old scan — drop it
+                        } else {
+                            self.insights_progress = None;
+                            self.insights_scanning = false;
+                            self.insights = LoadState::Loaded(result);
+                            self.sort_insights();
+                            // Recompute search filter against fresh data
+                            if self.search_query.is_some() {
+                                self.recompute_list_search();
                             }
+                            // Reset selection if out of bounds
+                            if let LoadState::Loaded(ref r) = self.insights {
+                                let selected = self.insights_table_state.selected().unwrap_or(0);
+                                if selected >= r.findings.len() && !r.findings.is_empty() {
+                                    self.insights_table_state
+                                        .select(Some(r.findings.len() - 1));
+                                }
+                            }
+                        }
+                    }
+                    DataPayload::InsightsPartial(result, gen) => {
+                        if gen != self.insights_scan_gen {
+                            // Stale partial from old scan — drop it
+                        } else {
+                            self.insights = LoadState::Loaded(result);
+                            self.insights_scanning = true;
+                            self.insights_table_state.select(Some(0));
+                            if self.search_query.is_some() {
+                                self.recompute_list_search();
+                            }
+                        }
+                    }
+                    DataPayload::InsightsProgress(phase, gen) => {
+                        if gen == self.insights_scan_gen {
+                            self.insights_progress = Some(phase);
                         }
                     }
                 }
@@ -1151,8 +1399,12 @@ impl App {
                 if self.activity_events.is_loading() {
                     self.activity_events = LoadState::Error(msg.clone());
                 }
-                if self.insights.is_loading() {
-                    self.insights = LoadState::Error(msg);
+                if self.insights.is_loading() || self.insights_scanning {
+                    self.insights_scanning = false;
+                    if self.insights.is_loading() {
+                        self.insights = LoadState::Error(msg);
+                    }
+                    // If we have partial results, keep them visible
                 }
                 vec![]
             }
@@ -1173,25 +1425,44 @@ impl App {
         }
     }
 
-    /// Build a LoadInsights effect using the current filter state
-    fn load_insights_effect(&self) -> Effect {
-        let limit = if self.filter.has_date_range() {
-            1000
-        } else {
-            500
-        };
-        Effect::LoadInsights {
-            filter: self.filter.clone(),
-            limit,
+    /// Build a LoadWorkflows effect, incrementing the gen counter to invalidate stale streams.
+    fn load_workflows_effect(&mut self) -> Effect {
+        self.workflows_load_gen += 1;
+        Effect::LoadWorkflows {
+            gen: self.workflows_load_gen,
         }
     }
 
-    /// Return the appropriate reload effects based on the current view
-    fn date_range_reload_effects(&self) -> Vec<Effect> {
-        if self.view == View::TypeList {
-            vec![Effect::LoadTypeStats]
+    /// Build a LoadInsights effect using the current filter state.
+    /// Increments the scan generation counter to invalidate stale results.
+    fn load_insights_effect(&mut self) -> Effect {
+        self.insights_scan_gen += 1;
+        Effect::LoadInsights {
+            filter: self.filter.clone(),
+            limit: u32::MAX,
+            gen: self.insights_scan_gen,
+        }
+    }
+
+    /// Return the appropriate reload effects based on the current view.
+    /// Also reloads counts so the status dashboard matches the date range.
+    fn date_range_reload_effects(&mut self) -> Vec<Effect> {
+        let load_counts = Effect::LoadCounts { filter: self.filter.clone() };
+        if self.view == View::Insights {
+            self.insights = LoadState::Loading;
+            self.insights_progress = None;
+            self.insights_scanning = false;
+            self.insights_table_state.select(Some(0));
+            vec![self.load_insights_effect()]
+        } else if self.view == View::TypeList {
+            self.status_counts = LoadState::Loading;
+            vec![load_counts, Effect::LoadTypeStats]
         } else {
-            vec![Effect::LoadWorkflows]
+            self.status_counts = LoadState::Loading;
+            self.workflows = LoadState::Loading;
+            self.workflows_loading = false;
+            let load_wf = self.load_workflows_effect();
+            vec![load_counts, load_wf]
         }
     }
 
@@ -1305,7 +1576,7 @@ impl App {
         if let LoadState::Loaded(ref stats) = self.type_stats {
             let selected = self.type_table_state.selected().unwrap_or(0);
             let data_index = self.translate_selection(selected);
-            stats.get(data_index).map(|ts| ts.workflow_type.as_str())
+            stats.get(data_index).map(|ts| &*ts.workflow_type)
         } else {
             None
         }
@@ -1386,6 +1657,62 @@ impl App {
                         }
                     });
                 }
+            }
+        }
+    }
+
+    fn sort_insights(&mut self) {
+        if let (Some((col, dir)), LoadState::Loaded(ref mut result)) =
+            (&self.insights_sort, &mut self.insights)
+        {
+            let dir = *dir;
+            match col {
+                InsightSortColumn::Severity => result.findings.sort_by(|a, b| {
+                    let cmp = a.severity.cmp(&b.severity);
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+                InsightSortColumn::Category => result.findings.sort_by(|a, b| {
+                    let cmp = a.category.label().cmp(b.category.label());
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+                InsightSortColumn::Type => result.findings.sort_by(|a, b| {
+                    let a_type = a.workflow_type.as_deref().unwrap_or("\u{ffff}");
+                    let b_type = b.workflow_type.as_deref().unwrap_or("\u{ffff}");
+                    let cmp = a_type.cmp(b_type);
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+                InsightSortColumn::LastSeen => result.findings.sort_by(|a, b| {
+                    let cmp = a.last_observed.cmp(&b.last_observed);
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+                InsightSortColumn::Affected => result.findings.sort_by(|a, b| {
+                    let cmp = a.affected_entities.len().cmp(&b.affected_entities.len());
+                    if dir == SortDirection::Descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                }),
+            }
+            // Recompute search indices after sort
+            if self.search_query.is_some() {
+                self.recompute_list_search();
             }
         }
     }
@@ -1471,6 +1798,31 @@ impl App {
         self.search_match_lines.clear();
         self.search_current_match = 0;
         self.search_filtered_indices.clear();
+    }
+
+    /// Save current search state to stack and clear for fresh view
+    fn push_search_state(&mut self) {
+        self.saved_searches.push(SavedSearch {
+            query: self.search_query.take(),
+            input: std::mem::take(&mut self.search_input),
+            filtered_indices: std::mem::take(&mut self.search_filtered_indices),
+            match_lines: std::mem::take(&mut self.search_match_lines),
+            current_match: self.search_current_match,
+        });
+        self.search_current_match = 0;
+    }
+
+    /// Restore previous search state from stack
+    fn pop_search_state(&mut self) {
+        if let Some(saved) = self.saved_searches.pop() {
+            self.search_query = saved.query;
+            self.search_input = saved.input;
+            self.search_filtered_indices = saved.filtered_indices;
+            self.search_match_lines = saved.match_lines;
+            self.search_current_match = saved.current_match;
+        } else {
+            self.clear_search_state();
+        }
     }
 
     /// Recompute search match lines for the current detail view
@@ -1579,10 +1931,12 @@ impl App {
             View::Insights => {
                 if let LoadState::Loaded(ref result) = self.insights {
                     for (i, f) in result.findings.iter().enumerate() {
+                        let wf_type = f.workflow_type.as_deref().unwrap_or("");
                         let text = format!(
-                            "{} {} {}",
+                            "{} {} {} {}",
                             f.severity.label(),
                             f.category.label(),
+                            wf_type,
                             f.title
                         )
                         .to_lowercase();
@@ -1644,14 +1998,19 @@ impl App {
 /// Side effects to be performed after state update
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    LoadCounts,
-    LoadWorkflows,
+    LoadCounts {
+        filter: WorkflowFilter,
+    },
+    LoadWorkflows {
+        gen: u64,
+    },
     LoadWorkflowDetail(String, Option<String>),
     LoadTypeStats,
     LoadHistory(String, Option<String>),
     LoadInsights {
         filter: WorkflowFilter,
         limit: u32,
+        gen: u64,
     },
     CancelWorkflow(String),
     TerminateWorkflow(String),
@@ -1666,33 +2025,34 @@ mod tests {
     use chrono::Utc;
 
     fn make_test_workflows() -> Vec<WorkflowSummary> {
+        use std::sync::Arc;
         vec![
             WorkflowSummary {
                 workflow_id: "wf-1".to_string(),
                 run_id: "run-1".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Running,
                 start_time: Utc::now(),
                 close_time: None,
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
             WorkflowSummary {
                 workflow_id: "wf-2".to_string(),
                 run_id: "run-2".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Completed,
                 start_time: Utc::now(),
                 close_time: Some(Utc::now()),
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
             WorkflowSummary {
                 workflow_id: "wf-3".to_string(),
                 run_id: "run-3".to_string(),
-                workflow_type: "Test".to_string(),
+                workflow_type: Arc::from("Test"),
                 status: WorkflowStatus::Failed,
                 start_time: Utc::now(),
                 close_time: Some(Utc::now()),
-                task_queue: "default".to_string(),
+                task_queue: Arc::from("default"),
             },
         ]
     }
@@ -1734,8 +2094,8 @@ mod tests {
         assert!(matches!(app.workflows, LoadState::Loading));
         // LoadCounts loads counts for all statuses from API
         // LoadWorkflows loads the filtered workflow list
-        assert!(effects.contains(&Effect::LoadCounts));
-        assert!(effects.contains(&Effect::LoadWorkflows));
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadCounts { .. })));
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadWorkflows { .. })));
     }
 
     #[test]
@@ -1794,7 +2154,7 @@ mod tests {
         let effects = app.update(Action::SetStatusFilter(Some(WorkflowStatus::Failed)));
 
         assert_eq!(app.filter.status, Some(WorkflowStatus::Failed));
-        assert!(effects.contains(&Effect::LoadWorkflows));
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadWorkflows { .. })));
     }
 
     #[test]
@@ -1806,7 +2166,7 @@ mod tests {
         let effects = app.update(Action::ClearFilters);
 
         assert!(app.filter.is_empty());
-        assert!(effects.contains(&Effect::LoadWorkflows));
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadWorkflows { .. })));
     }
 
     #[test]

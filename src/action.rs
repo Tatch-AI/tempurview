@@ -1,6 +1,6 @@
 use crate::domain::{
-    DateRangePreset, HistoryEvent, InsightsResult, StatusCounts, TypeStat, WorkflowDetail,
-    WorkflowStatus, WorkflowSummary,
+    DateRangePreset, HistoryEvent, InsightsResult, InsightsScanPhase, StatusCounts, TypeStat,
+    WorkflowDetail, WorkflowStatus, WorkflowSummary,
 };
 
 /// Table columns that can be toggled
@@ -86,10 +86,13 @@ pub enum Action {
     // Column visibility
     ToggleColumn(TableColumn),
 
-    // Sorting
+    // Sorting / Picker
     EnterSortMode,
     SortBy(u8),
-    CloseSort,
+    ClosePicker,
+    PickerUp,
+    PickerDown,
+    PickerSelect,
 
     // Date range
     EnterDateRangeMode,
@@ -161,7 +164,10 @@ impl PartialEq for Action {
             (Action::ToggleColumn(a), Action::ToggleColumn(b)) => a == b,
             (Action::EnterSortMode, Action::EnterSortMode) => true,
             (Action::SortBy(a), Action::SortBy(b)) => a == b,
-            (Action::CloseSort, Action::CloseSort) => true,
+            (Action::ClosePicker, Action::ClosePicker) => true,
+            (Action::PickerUp, Action::PickerUp) => true,
+            (Action::PickerDown, Action::PickerDown) => true,
+            (Action::PickerSelect, Action::PickerSelect) => true,
             (Action::OpenFilterInput, Action::OpenFilterInput) => true,
             (Action::CloseFilterInput, Action::CloseFilterInput) => true,
             (Action::AppendFilterChar(a), Action::AppendFilterChar(b)) => a == b,
@@ -197,9 +203,13 @@ impl Eq for Action {}
 #[derive(Debug, Clone)]
 pub enum DataPayload {
     Counts(StatusCounts),
-    Workflows(Vec<WorkflowSummary>),
+    Workflows(Vec<WorkflowSummary>, u64),
+    WorkflowsPage(Vec<WorkflowSummary>, u64),
+    WorkflowsDone(u64),
     Detail(Box<WorkflowDetail>),
     TypeStats(Vec<TypeStat>),
     History(Vec<HistoryEvent>),
-    Insights(InsightsResult),
+    Insights(InsightsResult, u64),
+    InsightsPartial(InsightsResult, u64),
+    InsightsProgress(InsightsScanPhase, u64),
 }

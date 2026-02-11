@@ -17,11 +17,14 @@ use tracing::{debug, error, info, warn};
 #[derive(Debug, Clone)]
 pub enum CliRequest {
     /// Load workflow status counts (one query per status, executed sequentially)
-    LoadCounts,
+    LoadCounts {
+        filter: WorkflowFilter,
+    },
     /// Load workflows matching a filter
     LoadWorkflows {
         filter: WorkflowFilter,
         limit: u32,
+        gen: u64,
     },
     /// Load detailed information about a specific workflow
     LoadDetail {
@@ -53,6 +56,7 @@ pub enum CliRequest {
     LoadInsights {
         filter: WorkflowFilter,
         limit: u32,
+        gen: u64,
     },
 }
 
@@ -100,9 +104,9 @@ impl CliWorker {
     /// Handle a single request
     async fn handle_request(&self, request: CliRequest) {
         match request {
-            CliRequest::LoadCounts => self.load_counts().await,
-            CliRequest::LoadWorkflows { filter, limit } => {
-                self.load_workflows(filter, limit).await
+            CliRequest::LoadCounts { filter } => self.load_counts(&filter).await,
+            CliRequest::LoadWorkflows { filter, limit, gen } => {
+                self.load_workflows(filter, limit, gen);
             }
             CliRequest::LoadDetail {
                 workflow_id,
@@ -124,19 +128,38 @@ impl CliWorker {
                 workflow_id,
                 run_id,
             } => self.load_history(workflow_id, run_id).await,
-            CliRequest::LoadInsights { filter, limit } => {
-                self.load_insights(&filter, limit).await
+            CliRequest::LoadInsights { filter, limit, gen } => {
+                self.load_insights(&filter, limit, gen);
             }
         }
     }
 
-    /// Load workflow counts for all statuses via count() API
-    async fn load_counts(&self) {
+    /// Load workflow counts for all statuses via count() API.
+    /// Includes date range from filter so counts match the visible workflow list.
+    async fn load_counts(&self, filter: &WorkflowFilter) {
         debug!("Loading workflow counts for all statuses");
         let mut counts = StatusCounts::new();
 
+        // Build date conditions from filter
+        let date_filter = WorkflowFilter {
+            start_time_after: filter.start_time_after,
+            start_time_before: filter.start_time_before,
+            close_time_after: filter.close_time_after,
+            close_time_before: filter.close_time_before,
+            ..WorkflowFilter::new()
+        };
+
         for status in WorkflowStatus::all() {
-            let query = format!("ExecutionStatus='{}'", status.as_query_value());
+            let mut conditions = vec![
+                format!("ExecutionStatus='{}'", status.as_query_value()),
+            ];
+            // Append date conditions from the date-only filter
+            let date_query = date_filter.to_query();
+            if let Some(dq) = &date_query {
+                conditions.push(dq.clone());
+            }
+            let query = conditions.join(" AND ");
+
             match self.client.count(Some(&query)).await {
                 Ok(count) => {
                     debug!("Status {:?}: {} workflows", status, count);
@@ -144,7 +167,6 @@ impl CliWorker {
                 }
                 Err(e) => {
                     error!("Failed to load count for status {:?}: {}", status, e);
-                    // Continue with other statuses, don't fail completely
                 }
             }
         }
@@ -154,25 +176,71 @@ impl CliWorker {
             .send(Action::DataLoaded(DataPayload::Counts(counts)));
     }
 
-    /// Load workflows matching a filter
-    async fn load_workflows(&self, filter: WorkflowFilter, limit: u32) {
+    /// Load workflows matching a filter using streaming pagination.
+    /// Spawns the streaming+forwarding as a detached task so the worker
+    /// can immediately process subsequent requests (e.g. LoadDetail).
+    fn load_workflows(&self, filter: WorkflowFilter, limit: u32, gen: u64) {
         info!(
-            "CliWorker: Loading workflows: filter={:?}, limit={}",
+            "CliWorker: Loading workflows (streaming): filter={:?}, limit={}, gen={}",
             filter.description(),
-            limit
+            limit,
+            gen
         );
-        match self.client.list(&filter, limit).await {
-            Ok(workflows) => {
-                info!("CliWorker: Loaded {} workflows successfully", workflows.len());
-                let _ = self
-                    .action_tx
-                    .send(Action::DataLoaded(DataPayload::Workflows(workflows)));
+
+        let client = self.client.clone();
+        let action_tx = self.action_tx.clone();
+
+        tokio::spawn(async move {
+            let (page_tx, mut page_rx) = mpsc::unbounded_channel();
+
+            // Spawn streaming list in background
+            let filter_clone = filter.clone();
+            let list_task = tokio::spawn(async move {
+                client.list_streaming(&filter_clone, limit, page_tx).await
+            });
+
+            // Forward pages to app as they arrive
+            let mut total_loaded = 0usize;
+            while let Some(page) = page_rx.recv().await {
+                total_loaded += page.len();
+                info!(
+                    "CliWorker: Forwarding page ({} workflows total)",
+                    total_loaded
+                );
+                let _ = action_tx
+                    .send(Action::DataLoaded(DataPayload::WorkflowsPage(page, gen)));
             }
-            Err(e) => {
-                error!("CliWorker: Failed to load workflows: {}", e);
-                let _ = self.action_tx.send(Action::Error(e.to_string()));
+
+            // Channel closed — streaming complete or errored
+            match list_task.await {
+                Ok(Ok(())) => {
+                    info!(
+                        "CliWorker: Streaming complete ({} workflows)",
+                        total_loaded
+                    );
+                    let _ = action_tx
+                        .send(Action::DataLoaded(DataPayload::WorkflowsDone(gen)));
+                }
+                Ok(Err(e)) => {
+                    error!(
+                        "CliWorker: Streaming failed after {} workflows: {}",
+                        total_loaded, e
+                    );
+                    if total_loaded > 0 {
+                        let _ = action_tx
+                            .send(Action::DataLoaded(DataPayload::WorkflowsDone(gen)));
+                    }
+                    let _ = action_tx.send(Action::Error(format!(
+                        "Loaded {} workflows before error: {}",
+                        total_loaded, e
+                    )));
+                }
+                Err(e) => {
+                    error!("CliWorker: Streaming task panicked: {}", e);
+                    let _ = action_tx.send(Action::Error(e.to_string()));
+                }
             }
-        }
+        });
     }
 
     /// Load detailed information about a workflow
@@ -246,19 +314,35 @@ impl CliWorker {
         }
     }
 
-    /// Run insights scan using the shared scan function
-    async fn load_insights(&self, filter: &WorkflowFilter, limit: u32) {
-        match run_insights_scan(self.client.as_ref(), filter, limit, &self.insights_config).await {
-            Ok(result) => {
-                let _ = self
-                    .action_tx
-                    .send(Action::DataLoaded(DataPayload::Insights(result)));
+    /// Run insights scan as a detached task (same pattern as load_workflows).
+    /// Returns immediately so the worker can process other requests concurrently.
+    fn load_insights(&self, filter: &WorkflowFilter, limit: u32, gen: u64) {
+        let client = self.client.clone();
+        let action_tx = self.action_tx.clone();
+        let config = self.insights_config.clone();
+        let filter = filter.clone();
+
+        tokio::spawn(async move {
+            match run_insights_scan(
+                client,
+                &filter,
+                limit,
+                &config,
+                Some(action_tx.clone()),
+                gen,
+            )
+            .await
+            {
+                Ok(result) => {
+                    let _ = action_tx
+                        .send(Action::DataLoaded(DataPayload::Insights(result, gen)));
+                }
+                Err(e) => {
+                    error!("CliWorker: Failed insights scan: {}", e);
+                    let _ = action_tx.send(Action::Error(e.to_string()));
+                }
             }
-            Err(e) => {
-                error!("CliWorker: Failed insights scan: {}", e);
-                let _ = self.action_tx.send(Action::Error(e.to_string()));
-            }
-        }
+        });
     }
 
     /// Cancel a running workflow
@@ -319,13 +403,13 @@ impl CliHandle {
     }
 
     /// Load workflow counts
-    pub fn load_counts(&self) {
-        let _ = self.send(CliRequest::LoadCounts);
+    pub fn load_counts(&self, filter: WorkflowFilter) {
+        let _ = self.send(CliRequest::LoadCounts { filter });
     }
 
     /// Load workflows with a filter
-    pub fn load_workflows(&self, filter: WorkflowFilter, limit: u32) {
-        let _ = self.send(CliRequest::LoadWorkflows { filter, limit });
+    pub fn load_workflows(&self, filter: WorkflowFilter, limit: u32, gen: u64) {
+        let _ = self.send(CliRequest::LoadWorkflows { filter, limit, gen });
     }
 
     /// Load workflow detail
@@ -350,8 +434,8 @@ impl CliHandle {
     }
 
     /// Run insights scan
-    pub fn load_insights(&self, filter: WorkflowFilter, limit: u32) {
-        let _ = self.send(CliRequest::LoadInsights { filter, limit });
+    pub fn load_insights(&self, filter: WorkflowFilter, limit: u32, gen: u64) {
+        let _ = self.send(CliRequest::LoadInsights { filter, limit, gen });
     }
 
     /// Cancel a workflow
@@ -389,16 +473,28 @@ mod tests {
         let _handle = worker.spawn();
 
         let cli_handle = CliHandle::new(request_tx);
-        cli_handle.load_workflows(WorkflowFilter::new(), 50);
+        cli_handle.load_workflows(WorkflowFilter::new(), 50, 1);
 
-        // Wait for the action
-        let result = timeout(Duration::from_secs(5), action_rx.recv()).await;
-        assert!(result.is_ok());
-        let action = result.unwrap();
-        assert!(matches!(
-            action,
-            Some(Action::DataLoaded(DataPayload::Workflows(_)))
-        ));
+        // Streaming sends WorkflowsPage(s) then WorkflowsDone
+        let mut got_page = false;
+        let mut got_done = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            match timeout(Duration::from_secs(2), action_rx.recv()).await {
+                Ok(Some(Action::DataLoaded(DataPayload::WorkflowsPage(page, _gen)))) => {
+                    assert!(!page.is_empty());
+                    got_page = true;
+                }
+                Ok(Some(Action::DataLoaded(DataPayload::WorkflowsDone(_gen)))) => {
+                    got_done = true;
+                    break;
+                }
+                Ok(Some(_)) => {} // ignore other actions
+                _ => break,
+            }
+        }
+        assert!(got_page, "Expected at least one WorkflowsPage");
+        assert!(got_done, "Expected WorkflowsDone");
     }
 
     #[tokio::test]
@@ -412,7 +508,7 @@ mod tests {
         let _handle = worker.spawn();
 
         let cli_handle = CliHandle::new(request_tx);
-        cli_handle.load_counts();
+        cli_handle.load_counts(WorkflowFilter::new());
 
         // Should receive counts for all statuses
         let result = timeout(Duration::from_secs(5), action_rx.recv()).await;
@@ -431,7 +527,7 @@ mod tests {
         let handle2 = handle1.clone();
 
         // Both handles should be usable
-        assert!(handle1.send(CliRequest::LoadCounts).is_ok());
-        assert!(handle2.send(CliRequest::LoadCounts).is_ok());
+        assert!(handle1.send(CliRequest::LoadCounts { filter: WorkflowFilter::new() }).is_ok());
+        assert!(handle2.send(CliRequest::LoadCounts { filter: WorkflowFilter::new() }).is_ok());
     }
 }

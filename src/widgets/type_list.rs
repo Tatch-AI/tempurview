@@ -24,7 +24,7 @@ pub struct TypeListWidget<'a> {
     sort: &'a Option<(TypeListColumn, SortDirection)>,
     date_label: Option<&'a str>,
     name_filter: Option<&'a str>,
-    search_query: Option<&'a str>,
+    filtered_indices: Option<&'a [usize]>,
 }
 
 impl<'a> TypeListWidget<'a> {
@@ -37,7 +37,7 @@ impl<'a> TypeListWidget<'a> {
             sort,
             date_label: None,
             name_filter: None,
-            search_query: None,
+            filtered_indices: None,
         }
     }
 
@@ -51,17 +51,13 @@ impl<'a> TypeListWidget<'a> {
         self
     }
 
-    pub fn search_query(mut self, query: Option<&'a str>) -> Self {
-        self.search_query = query;
+    pub fn filtered_indices(mut self, indices: Option<&'a [usize]>) -> Self {
+        self.filtered_indices = indices;
         self
     }
 
     fn build_title(&self, display_count: usize) -> String {
-        let mut title = if let LoadState::Loaded(_) = self.type_stats {
-            format!("Workflow Types ({})", display_count)
-        } else {
-            "Workflow Types".to_string()
-        };
+        let mut title = format!("Workflow Types ({})", display_count);
 
         let mut parts = Vec::new();
         if let Some(label) = self.date_label {
@@ -148,11 +144,11 @@ impl StatefulWidget for TypeListWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         match self.type_stats {
             LoadState::Loaded(stats) => {
-                // Apply client-side name filter and search query
-                let filtered: Vec<&TypeStat> = stats
+                // Apply client-side name filter (from 'f' key — separate from search)
+                let name_filtered: Vec<usize> = stats
                     .iter()
-                    .filter(|s| {
-                        // Apply name_filter (from 'f' key)
+                    .enumerate()
+                    .filter(|(_, s)| {
                         if let Some(filter) = self.name_filter {
                             if !filter.is_empty()
                                 && !s
@@ -163,23 +159,31 @@ impl StatefulWidget for TypeListWidget<'_> {
                                 return false;
                             }
                         }
-                        // Apply search_query (from '/' key)
-                        if let Some(query) = self.search_query.filter(|q| !q.is_empty()) {
-                            if !s
-                                .workflow_type
-                                .to_lowercase()
-                                .contains(&query.to_lowercase())
-                            {
-                                return false;
-                            }
-                        }
                         true
                     })
+                    .map(|(i, _)| i)
                     .collect();
 
-                let title = self.build_title(filtered.len());
+                // If search filtered_indices are provided, intersect with name filter
+                let effective_indices: Vec<usize> = if let Some(search_indices) =
+                    self.filtered_indices
+                {
+                    // search_indices are indices into the stats array
+                    // name_filtered are also indices into stats array
+                    // We need the intersection
+                    search_indices
+                        .iter()
+                        .filter(|idx| name_filtered.contains(idx))
+                        .copied()
+                        .collect()
+                } else {
+                    name_filtered
+                };
 
-                if filtered.is_empty() {
+                let total_len = effective_indices.len();
+                let title = self.build_title(total_len);
+
+                if total_len == 0 {
                     let empty = Paragraph::new("No workflow types found")
                         .style(Style::default().add_modifier(Modifier::DIM))
                         .block(
@@ -194,7 +198,28 @@ impl StatefulWidget for TypeListWidget<'_> {
                 let header = self.build_header();
                 let widths = self.build_widths();
 
-                let rows: Vec<Row> = filtered.iter().map(|s| self.stat_to_row(s)).collect();
+                // Virtual viewport rendering
+                let viewport_height = area.height.saturating_sub(4) as usize;
+                let offset = state.offset();
+                let selected = state.selected().unwrap_or(0);
+
+                let adjusted_offset = if selected < offset {
+                    selected
+                } else if viewport_height > 0 && selected >= offset + viewport_height {
+                    selected.saturating_sub(viewport_height - 1)
+                } else {
+                    offset
+                };
+                *state.offset_mut() = adjusted_offset;
+
+                let end = (adjusted_offset + viewport_height).min(total_len);
+
+                let rows: Vec<Row> = (adjusted_offset..end)
+                    .map(|visible_idx| {
+                        let data_idx = effective_indices[visible_idx];
+                        self.stat_to_row(&stats[data_idx])
+                    })
+                    .collect();
 
                 let table = Table::new(rows, widths)
                     .header(header)
@@ -210,7 +235,11 @@ impl StatefulWidget for TypeListWidget<'_> {
                     )
                     .highlight_symbol("▶ ");
 
-                StatefulWidget::render(table, area, buf, state);
+                let mut local_state = TableState::default();
+                if selected >= adjusted_offset && selected < end {
+                    local_state.select(Some(selected - adjusted_offset));
+                }
+                StatefulWidget::render(table, area, buf, &mut local_state);
             }
             LoadState::Loading => {
                 let loading = Paragraph::new("Loading workflow types...")

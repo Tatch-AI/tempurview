@@ -1,6 +1,7 @@
 use crate::domain::{HistoryEvent, WorkflowDetail, WorkflowFilter, WorkflowSummary};
 use async_trait::async_trait;
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 /// Results from async operations
 pub type ClientResult<T> = Result<T, ClientError>;
@@ -61,4 +62,17 @@ pub trait TemporalClient: Send + Sync {
         run_id: Option<&str>,
         reason: &str,
     ) -> ClientResult<()>;
+
+    /// Stream workflow pages through a channel during pagination.
+    /// Default impl calls list() and sends all results as one batch.
+    async fn list_streaming(
+        &self,
+        filter: &WorkflowFilter,
+        limit: u32,
+        page_tx: mpsc::UnboundedSender<Vec<WorkflowSummary>>,
+    ) -> ClientResult<()> {
+        let results = self.list(filter, limit).await?;
+        let _ = page_tx.send(results);
+        Ok(())
+    }
 }

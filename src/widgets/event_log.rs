@@ -11,19 +11,19 @@ use ratatui::{
 /// Table view of all history events, selectable with j/k and Enter for drill-down
 pub struct EventLogWidget<'a> {
     events: &'a LoadState<Vec<HistoryEvent>>,
-    search_query: Option<&'a str>,
+    filtered_indices: Option<&'a [usize]>,
 }
 
 impl<'a> EventLogWidget<'a> {
     pub fn new(events: &'a LoadState<Vec<HistoryEvent>>) -> Self {
         Self {
             events,
-            search_query: None,
+            filtered_indices: None,
         }
     }
 
-    pub fn search_query(mut self, query: Option<&'a str>) -> Self {
-        self.search_query = query;
+    pub fn filtered_indices(mut self, indices: Option<&'a [usize]>) -> Self {
+        self.filtered_indices = indices;
         self
     }
 
@@ -64,6 +64,20 @@ impl<'a> EventLogWidget<'a> {
             String::new()
         }
     }
+
+    fn event_to_row(event: &HistoryEvent) -> Row<'static> {
+        let ts = event.timestamp.format("%H:%M:%S%.3f").to_string();
+        let color = Self::event_color(&event.event_type);
+        let summary = Self::summary(event);
+
+        Row::new(vec![
+            format!("#{}", event.event_id),
+            ts,
+            event.event_type.clone(),
+            summary,
+        ])
+        .style(Style::default().fg(color))
+    }
 }
 
 impl StatefulWidget for EventLogWidget<'_> {
@@ -72,26 +86,15 @@ impl StatefulWidget for EventLogWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut TableState) {
         match self.events {
             LoadState::Loaded(events) => {
-                // Apply search filter
-                let filtered: Vec<&HistoryEvent> =
-                    if let Some(query) = self.search_query.filter(|q| !q.is_empty()) {
-                        let lower = query.to_lowercase();
-                        events
-                            .iter()
-                            .filter(|ev| {
-                                format!("{} {}", ev.event_id, ev.event_type)
-                                    .to_lowercase()
-                                    .contains(&lower)
-                            })
-                            .collect()
-                    } else {
-                        events.iter().collect()
-                    };
+                let total_len = match self.filtered_indices {
+                    Some(indices) => indices.len(),
+                    None => events.len(),
+                };
 
-                let title = if self.search_query.is_some() {
+                let title = if self.filtered_indices.is_some() {
                     format!(
                         " Event Log ({}/{} events) ",
-                        filtered.len(),
+                        total_len,
                         events.len()
                     )
                 } else {
@@ -104,6 +107,14 @@ impl StatefulWidget for EventLogWidget<'_> {
                         Style::default().fg(Color::Cyan).bold(),
                     ));
 
+                if total_len == 0 {
+                    let empty = Paragraph::new("No matching events")
+                        .style(Style::default().add_modifier(Modifier::DIM))
+                        .block(block);
+                    empty.render(area, buf);
+                    return;
+                }
+
                 let header = Row::new(vec!["#", "Time", "Event Type", "Summary"])
                     .style(
                         Style::default()
@@ -112,29 +123,39 @@ impl StatefulWidget for EventLogWidget<'_> {
                     )
                     .bottom_margin(0);
 
-                let rows: Vec<Row> = filtered
-                    .iter()
-                    .map(|event| {
-                        let ts = event.timestamp.format("%H:%M:%S%.3f").to_string();
-                        let color = Self::event_color(&event.event_type);
-                        let summary = Self::summary(event);
-
-                        Row::new(vec![
-                            format!("#{}", event.event_id),
-                            ts,
-                            event.event_type.clone(),
-                            summary,
-                        ])
-                        .style(Style::default().fg(color))
-                    })
-                    .collect();
-
                 let widths = [
                     Constraint::Length(6),
                     Constraint::Length(14),
                     Constraint::Length(35),
                     Constraint::Fill(1),
                 ];
+
+                // Virtual viewport rendering
+                // borders(2) + header(1) = 3
+                let viewport_height = area.height.saturating_sub(3) as usize;
+                let offset = state.offset();
+                let selected = state.selected().unwrap_or(0);
+
+                let adjusted_offset = if selected < offset {
+                    selected
+                } else if viewport_height > 0 && selected >= offset + viewport_height {
+                    selected.saturating_sub(viewport_height - 1)
+                } else {
+                    offset
+                };
+                *state.offset_mut() = adjusted_offset;
+
+                let end = (adjusted_offset + viewport_height).min(total_len);
+
+                let rows: Vec<Row> = (adjusted_offset..end)
+                    .map(|visible_idx| {
+                        let data_idx = match self.filtered_indices {
+                            Some(indices) => indices[visible_idx],
+                            None => visible_idx,
+                        };
+                        Self::event_to_row(&events[data_idx])
+                    })
+                    .collect();
 
                 let table = Table::new(rows, widths)
                     .header(header)
@@ -146,7 +167,11 @@ impl StatefulWidget for EventLogWidget<'_> {
                     )
                     .highlight_symbol(">> ");
 
-                StatefulWidget::render(table, area, buf, state);
+                let mut local_state = TableState::default();
+                if selected >= adjusted_offset && selected < end {
+                    local_state.select(Some(selected - adjusted_offset));
+                }
+                StatefulWidget::render(table, area, buf, &mut local_state);
             }
             LoadState::Loading => {
                 let loading = Paragraph::new("Loading event history...")
