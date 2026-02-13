@@ -239,6 +239,8 @@ async fn create_client(config: &Config) -> color_eyre::Result<Arc<dyn TemporalCl
                  TEMPORAL_ADDRESS   - Temporal server address\n  \
                  TEMPORAL_NAMESPACE - Temporal namespace\n  \
                  TEMPORAL_API_KEY   - API key for authentication (required for Temporal Cloud)\n\n\
+                 Or configure a profile:\n  \
+                 tempurview config profile-add local --address localhost:7233 --namespace default\n\n\
                  Or use --mock to run with simulated data"
             )
         })?;
@@ -284,6 +286,8 @@ async fn run_tui(config: Config) -> color_eyre::Result<()> {
                 eprintln!("  TEMPORAL_ADDRESS   - Temporal server address (e.g., us-west1.gcp.api.temporal.io:7233)");
                 eprintln!("  TEMPORAL_NAMESPACE - Temporal namespace");
                 eprintln!("  TEMPORAL_API_KEY   - API key for authentication (required for Temporal Cloud)");
+                eprintln!("\nOr configure a profile:");
+                eprintln!("  tempurview config profile-add local --address localhost:7233 --namespace default");
                 eprintln!("\nOr use --mock to run with simulated data");
                 return Ok(());
             }
@@ -317,6 +321,7 @@ async fn run_tui(config: Config) -> color_eyre::Result<()> {
     // Create app state
     let mut app = App::new();
     app.temporal_namespace = config.temporal_namespace.clone();
+    app.active_profile = config.active_profile.clone();
 
     // Create event handler
     let mut events = EventHandler::new(config.tick_rate);
@@ -498,8 +503,11 @@ fn render(app: &mut App, frame: &mut Frame) {
     render_title(app, frame, layout[0]);
 
     // Render dashboard
+    let afail_count = Some(app.activity_fail_ids.len() as u64);
     frame.render_widget(
-        StatusDashboard::new(&app.status_counts).selected(app.filter.status),
+        StatusDashboard::new(&app.status_counts)
+            .selected(app.filter.status)
+            .activity_fail(afail_count, app.activity_fail_filter, app.activity_fail_scanning),
         layout[1],
     );
 
@@ -569,6 +577,11 @@ fn render(app: &mut App, frame: &mut Frame) {
             let filtered = if app.search_query.is_some() && !app.search_filtered_indices.is_empty()
             {
                 Some(app.search_filtered_indices.as_slice())
+            } else if app.activity_fail_filter && !app.activity_fail_filtered_indices.is_empty() {
+                Some(app.activity_fail_filtered_indices.as_slice())
+            } else if app.activity_fail_filter {
+                // Filter is active but no matches — pass empty slice to show no rows
+                Some(&[] as &[usize])
             } else {
                 None
             };
@@ -763,8 +776,14 @@ fn render_title(app: &App, frame: &mut Frame, area: Rect) {
         View::InsightDetail => "Insight Detail",
     };
 
+    let title_text = if let Some(ref profile) = app.active_profile {
+        format!(" Tempurview [{}] - {} ", profile, view_name)
+    } else {
+        format!(" Tempurview - {} ", view_name)
+    };
+
     let title = Paragraph::new(Span::styled(
-        format!(" Tempurview - {} ", view_name),
+        title_text,
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
@@ -828,6 +847,9 @@ fn handle_effects(
             }
             Effect::LoadInsights { filter, limit, gen } => {
                 cli_handle.load_insights(filter, limit, gen);
+            }
+            Effect::ScanActivityFails { workflows, gen } => {
+                cli_handle.scan_activity_fails(workflows, gen);
             }
             Effect::CancelWorkflow(id) => {
                 let run_id = app.selected_workflow_run_id().map(|s| s.to_string());

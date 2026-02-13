@@ -72,19 +72,27 @@ impl GrpcTemporalClient {
         tracing::debug!("Namespace: {}", namespace);
         tracing::debug!("API key provided: {}", api_key.is_some());
 
-        // Build endpoint with TLS
-        let endpoint = format!("https://{}", address);
+        // Use TLS for authenticated connections (Temporal Cloud), plain gRPC for local
+        let use_tls = api_key.is_some();
+        let endpoint = if use_tls {
+            format!("https://{}", address)
+        } else {
+            format!("http://{}", address)
+        };
 
-        let channel = Endpoint::from_shared(endpoint.clone())
-            .map_err(|e| ClientError::ConnectionError(format!("Invalid endpoint: {}", e)))?
-            .tls_config(ClientTlsConfig::new().with_native_roots())
-            .map_err(|e| ClientError::ConnectionError(format!("TLS config error: {}", e)))?
-            .connect()
-            .await
-            .map_err(|e| {
-                tracing::error!("Connection failed to {}: {}", endpoint, e);
-                ClientError::ConnectionError(format!("Failed to connect: {}", e))
-            })?;
+        let mut ep = Endpoint::from_shared(endpoint.clone())
+            .map_err(|e| ClientError::ConnectionError(format!("Invalid endpoint: {}", e)))?;
+
+        if use_tls {
+            ep = ep
+                .tls_config(ClientTlsConfig::new().with_native_roots())
+                .map_err(|e| ClientError::ConnectionError(format!("TLS config error: {}", e)))?;
+        }
+
+        let channel = ep.connect().await.map_err(|e| {
+            tracing::error!("Connection failed to {}: {}", endpoint, e);
+            ClientError::ConnectionError(format!("Failed to connect: {}", e))
+        })?;
 
         tracing::info!("Connected to Temporal successfully");
 

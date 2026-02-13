@@ -49,17 +49,33 @@ The binary is available as both `tempurview` and `tpv`.
 ### Connect to Temporal Cloud
 
 ```bash
+# Option 1: Use connection profiles (recommended)
+tpv config profile-add cloud \
+  --address your-namespace.tmprl.cloud:7233 \
+  --namespace your-namespace \
+  --api-key your-api-key
+
+tpv                              # TUI with default profile
+tpv -p cloud workflow list       # CLI with named profile
+
+# Option 2: Use environment variables
 export TEMPORAL_ADDRESS="your-namespace.tmprl.cloud:7233"
 export TEMPORAL_NAMESPACE="your-namespace"
 export TEMPORAL_API_KEY="your-api-key"
 
-# Launch the interactive TUI
-tpv
-
-# Or use CLI mode
 tpv workflow list
-tpv workflow get <workflow-id>
 tpv insight scan --since 24h
+```
+
+### Multiple environments
+
+```bash
+tpv config profile-add cloud --address cloud.temporal.io:7233 --namespace prod
+tpv config profile-add local --address localhost:7233 --namespace default
+
+tpv -p local                     # TUI against local
+tpv -p cloud workflow list       # CLI against cloud
+tpv config set-default cloud     # set cloud as default
 ```
 
 ### Try it without a connection
@@ -73,6 +89,17 @@ tpv --mock
 Create `~/.tempurview/config.toml`:
 
 ```toml
+default_profile = "cloud"
+
+[profiles.cloud]
+address = "your-namespace.tmprl.cloud:7233"
+namespace = "your-namespace"
+api_key = "your-api-key"
+
+[profiles.local]
+address = "localhost:7233"
+namespace = "default"
+
 [insights]
 allowlist = ["PaymentWorkflow", "OrderProcessing"]
 ```
@@ -115,18 +142,19 @@ tpv completions fish > ~/.config/fish/completions/tpv.fish
 
 ## Configuration
 
-Configuration is resolved in priority order: **CLI flags > environment variables > config file > defaults**.
+Configuration is resolved in priority order: **CLI flags > profile > env vars > defaults**.
 
 | Variable | Default | Description |
 |---|---|---|
 | `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal server address |
 | `TEMPORAL_NAMESPACE` | `default` | Temporal namespace |
 | `TEMPORAL_API_KEY` | -- | API key for Temporal Cloud |
+| `TEMPURVIEW_PROFILE` | -- | Connection profile name |
 | `TEMPORAL_TUI_REFRESH_INTERVAL` | `30` | Auto-refresh interval in seconds |
 | `TEMPORAL_TUI_DEFAULT_LIMIT` | `50` | Max workflows to fetch per page |
 | `TEMPORAL_TUI_TICK_RATE` | `250` | TUI tick rate in milliseconds |
 
-All of the above can also be set via CLI flags (`--address`, `--namespace`, `--limit`). Run `tpv config show` to see the resolved configuration.
+Connection profiles (`tpv config profile-add`) let you save and switch between environments. Use `-p <name>` or `TEMPURVIEW_PROFILE` to select a profile. Run `tpv config show` to see the resolved configuration.
 
 <details>
 <summary><strong>TUI Keybindings</strong></summary>

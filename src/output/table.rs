@@ -179,6 +179,10 @@ impl TableDisplay for crate::config::Config {
     fn to_table(&self) -> Table {
         let mut table = new_table();
         table.set_header(vec!["SETTING", "VALUE"]);
+        table.add_row(vec![
+            "Active Profile",
+            self.active_profile.as_deref().unwrap_or("(none)"),
+        ]);
         table.add_row(vec!["Temporal Address", &self.temporal_address]);
         table.add_row(vec!["Temporal Namespace", &self.temporal_namespace]);
         table.add_row(vec![

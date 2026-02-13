@@ -19,6 +19,10 @@ tpv <command> [options]
 | `event list <id>` | List history events for a workflow |
 | `insight scan` | Scan workflows for operational insights |
 | `config show` | Show resolved configuration |
+| `config profile-add <name>` | Add a connection profile |
+| `config profile-list` | List all connection profiles |
+| `config profile-remove <name>` | Remove a connection profile |
+| `config set-default <name>` | Set the default profile |
 | `test-connection` | Test connection to Temporal server |
 
 ## Output format

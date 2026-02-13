@@ -21,12 +21,16 @@ pub struct Cli {
 
 #[derive(clap::Args)]
 pub struct GlobalArgs {
-    /// Temporal server address
-    #[arg(long, global = true, env = "TEMPORAL_ADDRESS")]
+    /// Connection profile to use (from ~/.tempurview/config.toml)
+    #[arg(long, short = 'p', global = true)]
+    pub profile: Option<String>,
+
+    /// Temporal server address (overrides profile)
+    #[arg(long, global = true)]
     pub address: Option<String>,
 
-    /// Temporal namespace
-    #[arg(long, global = true, env = "TEMPORAL_NAMESPACE")]
+    /// Temporal namespace (overrides profile)
+    #[arg(long, global = true)]
     pub namespace: Option<String>,
 
     /// Use mock data instead of connecting to Temporal
@@ -230,4 +234,30 @@ pub enum InsightAction {
 pub enum ConfigAction {
     /// Show resolved configuration
     Show,
+    /// Add a connection profile
+    ProfileAdd {
+        /// Profile name
+        name: String,
+        /// Temporal server address
+        #[arg(long)]
+        address: String,
+        /// Temporal namespace
+        #[arg(long)]
+        namespace: String,
+        /// API key for authentication (optional)
+        #[arg(long)]
+        api_key: Option<String>,
+    },
+    /// List all connection profiles
+    ProfileList,
+    /// Remove a connection profile
+    ProfileRemove {
+        /// Profile name to remove
+        name: String,
+    },
+    /// Set the default connection profile
+    SetDefault {
+        /// Profile name to set as default
+        name: String,
+    },
 }

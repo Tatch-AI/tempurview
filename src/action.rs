@@ -2,6 +2,7 @@ use crate::domain::{
     DateRangePreset, HistoryEvent, InsightsResult, InsightsScanPhase, StatusCounts, TypeStat,
     WorkflowDetail, WorkflowStatus, WorkflowSummary,
 };
+use std::collections::HashSet;
 
 /// Table columns that can be toggled
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,6 +76,7 @@ pub enum Action {
     // Filtering
     SetStatusFilter(Option<WorkflowStatus>),
     SetTypeFilter(Option<String>),
+    SetActivityFailFilter,
     NextStatusFilter,
     PrevStatusFilter,
     ClearFilters,
@@ -158,6 +160,7 @@ impl PartialEq for Action {
             (Action::ClearSearch, Action::ClearSearch) => true,
             (Action::SetStatusFilter(a), Action::SetStatusFilter(b)) => a == b,
             (Action::SetTypeFilter(a), Action::SetTypeFilter(b)) => a == b,
+            (Action::SetActivityFailFilter, Action::SetActivityFailFilter) => true,
             (Action::NextStatusFilter, Action::NextStatusFilter) => true,
             (Action::PrevStatusFilter, Action::PrevStatusFilter) => true,
             (Action::ClearFilters, Action::ClearFilters) => true,
@@ -212,4 +215,6 @@ pub enum DataPayload {
     Insights(InsightsResult, u64),
     InsightsPartial(InsightsResult, u64),
     InsightsProgress(InsightsScanPhase, u64),
+    ActivityFailPartial(HashSet<String>, u64),
+    ActivityFailIds(HashSet<String>, u64),
 }

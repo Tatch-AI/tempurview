@@ -8,6 +8,8 @@ use crate::client::TemporalClient;
 use crate::domain::{
     run_insights_scan, InsightsConfig, StatusCounts, TypeStat, WorkflowFilter, WorkflowStatus,
 };
+use futures::stream::{self, StreamExt};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -56,6 +58,11 @@ pub enum CliRequest {
     LoadInsights {
         filter: WorkflowFilter,
         limit: u32,
+        gen: u64,
+    },
+    /// Scan workflow histories for activity failures
+    ScanActivityFails {
+        workflows: Vec<(String, String)>,
         gen: u64,
     },
 }
@@ -130,6 +137,9 @@ impl CliWorker {
             } => self.load_history(workflow_id, run_id).await,
             CliRequest::LoadInsights { filter, limit, gen } => {
                 self.load_insights(&filter, limit, gen);
+            }
+            CliRequest::ScanActivityFails { workflows, gen } => {
+                self.scan_activity_fails(workflows, gen);
             }
         }
     }
@@ -345,6 +355,75 @@ impl CliWorker {
         });
     }
 
+    /// Scan workflow histories for activity failures. Spawns detached like load_workflows.
+    /// Sends progressive partial results every 50 workflows scanned.
+    fn scan_activity_fails(&self, workflows: Vec<(String, String)>, gen: u64) {
+        let client = self.client.clone();
+        let action_tx = self.action_tx.clone();
+
+        tokio::spawn(async move {
+            let total = workflows.len();
+            info!(
+                "ScanActivityFails: scanning {} workflows (gen={})",
+                total, gen
+            );
+
+            let mut fail_ids = HashSet::new();
+            let mut scanned = 0usize;
+
+            let mut results = stream::iter(workflows)
+                .map(|(wf_id, run_id)| {
+                    let client = client.clone();
+                    async move {
+                        let has_fail = match client.get_history(&wf_id, Some(&run_id)).await {
+                            Ok(events) => events
+                                .iter()
+                                .any(|ev| ev.event_type.contains("ActivityTaskFailed")),
+                            Err(e) => {
+                                debug!(
+                                    "ScanActivityFails: failed to get history for {}: {}",
+                                    wf_id, e
+                                );
+                                false
+                            }
+                        };
+                        (wf_id, has_fail)
+                    }
+                })
+                .buffer_unordered(50);
+
+            while let Some((wf_id, has_fail)) = results.next().await {
+                if has_fail {
+                    fail_ids.insert(wf_id);
+                }
+                scanned += 1;
+                // Send partial update every 50 workflows
+                if scanned % 50 == 0 {
+                    debug!(
+                        "ScanActivityFails: {}/{} scanned, {} found (gen={})",
+                        scanned,
+                        total,
+                        fail_ids.len(),
+                        gen
+                    );
+                    let _ = action_tx.send(Action::DataLoaded(
+                        DataPayload::ActivityFailPartial(fail_ids.clone(), gen),
+                    ));
+                }
+            }
+
+            info!(
+                "ScanActivityFails: complete — found {} in {} workflows (gen={})",
+                fail_ids.len(),
+                total,
+                gen
+            );
+            let _ = action_tx.send(Action::DataLoaded(DataPayload::ActivityFailIds(
+                fail_ids, gen,
+            )));
+        });
+    }
+
     /// Cancel a running workflow
     async fn cancel_workflow(&self, workflow_id: String, run_id: Option<String>) {
         info!("Cancelling workflow: {}", workflow_id);
@@ -436,6 +515,11 @@ impl CliHandle {
     /// Run insights scan
     pub fn load_insights(&self, filter: WorkflowFilter, limit: u32, gen: u64) {
         let _ = self.send(CliRequest::LoadInsights { filter, limit, gen });
+    }
+
+    /// Scan workflow histories for activity failures
+    pub fn scan_activity_fails(&self, workflows: Vec<(String, String)>, gen: u64) {
+        let _ = self.send(CliRequest::ScanActivityFails { workflows, gen });
     }
 
     /// Cancel a workflow

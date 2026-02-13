@@ -90,7 +90,7 @@ impl WorkflowStatus {
         match self {
             Self::Running => "RUN",
             Self::Completed => "OK",
-            Self::Failed => "FAIL",
+            Self::Failed => "W-FAIL",
             Self::Canceled => "CANC",
             Self::Terminated => "TERM",
             Self::TimedOut => "TIME",

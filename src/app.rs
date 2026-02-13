@@ -156,8 +156,16 @@ pub struct App {
     pub workflows_loading: bool,
     pub workflows_load_gen: u64,
 
+    // Activity failure scan state
+    pub activity_fail_ids: HashSet<String>,
+    pub activity_fail_scanning: bool,
+    pub activity_fail_scan_gen: u64,
+    pub activity_fail_filter: bool,
+    pub activity_fail_filtered_indices: Vec<usize>,
+
     // Config
     pub temporal_namespace: String,
+    pub active_profile: Option<String>,
 
     // App control
     pub should_quit: bool,
@@ -240,7 +248,14 @@ impl App {
             workflows_loading: false,
             workflows_load_gen: 0,
 
+            activity_fail_ids: HashSet::new(),
+            activity_fail_scanning: false,
+            activity_fail_scan_gen: 0,
+            activity_fail_filter: false,
+            activity_fail_filtered_indices: Vec::new(),
+
             temporal_namespace: String::new(),
+            active_profile: None,
 
             should_quit: false,
             last_error: None,
@@ -254,9 +269,21 @@ impl App {
     /// Apply an action and return any side effects to perform
     /// This is a pure function - no I/O happens here
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
-        // Clear last error on any action (except Error, Tick, and Quit which sets its own message)
-        if !matches!(action, Action::Error(_) | Action::Tick | Action::Quit) {
+        // Async/internal actions shouldn't clear the quit warning or error messages
+        let is_async = matches!(
+            action,
+            Action::Tick | Action::Error(_) | Action::DataLoaded(_)
+        );
+
+        if !is_async && !matches!(action, Action::Quit) {
+            // User-initiated action: clear error and reset quit state
             self.last_error = None;
+            self.last_quit_attempt = None;
+        } else if matches!(action, Action::DataLoaded(_)) {
+            // Data actions clear errors (stale messages) but NOT the quit warning
+            if self.last_quit_attempt.is_none() {
+                self.last_error = None;
+            }
         }
 
         // Reset PendingG mode on any action dispatched from it (except EnterPendingG itself)
@@ -453,6 +480,7 @@ impl App {
             }
             Action::SetStatusFilter(status) => {
                 self.filter.status = status;
+                self.activity_fail_filter = false;
                 self.table_state.select(Some(0));
                 self.workflows = LoadState::Loading;
                 self.workflows_loading = false;
@@ -460,46 +488,109 @@ impl App {
             }
             Action::SetTypeFilter(workflow_type) => {
                 self.filter.workflow_type = workflow_type;
+                self.activity_fail_filter = false;
                 self.table_state.select(Some(0));
                 self.workflows = LoadState::Loading;
                 self.workflows_loading = false;
                 vec![self.load_workflows_effect()]
+            }
+            Action::SetActivityFailFilter => {
+                self.activity_fail_filter = true;
+                self.filter.status = None;
+                self.table_state.select(Some(0));
+                self.recompute_activity_fail_filter();
+                vec![]
             }
             Action::NextStatusFilter => {
+                // Cycle: RUN→OK→W-FAIL→A-FAIL→CANC→TERM→TIME→CONT→RUN
                 let statuses = WorkflowStatus::all();
-                let next_status = match self.filter.status {
-                    None => Some(statuses[0]),
-                    Some(current) => {
-                        let current_idx = statuses.iter().position(|s| *s == current).unwrap_or(0);
-                        let next_idx = (current_idx + 1) % statuses.len();
-                        Some(statuses[next_idx])
+                let afail_after = WorkflowStatus::Failed; // A-FAIL follows Failed
+                if self.activity_fail_filter {
+                    // A-FAIL → next status after Failed (Canceled)
+                    self.activity_fail_filter = false;
+                    let idx = statuses.iter().position(|s| *s == afail_after).unwrap_or(0);
+                    let next_idx = (idx + 1) % statuses.len();
+                    self.filter.status = Some(statuses[next_idx]);
+                    self.table_state.select(Some(0));
+                    self.workflows = LoadState::Loading;
+                    self.workflows_loading = false;
+                    return vec![self.load_workflows_effect()];
+                }
+                match self.filter.status {
+                    None => {
+                        self.filter.status = Some(statuses[0]);
+                        self.table_state.select(Some(0));
+                        self.workflows = LoadState::Loading;
+                        self.workflows_loading = false;
+                        vec![self.load_workflows_effect()]
                     }
-                };
-                self.filter.status = next_status;
-                self.table_state.select(Some(0));
-                self.workflows = LoadState::Loading;
-                self.workflows_loading = false;
-                vec![self.load_workflows_effect()]
+                    Some(current) => {
+                        if current == afail_after {
+                            // Failed → A-FAIL (client-side)
+                            self.filter.status = None;
+                            self.activity_fail_filter = true;
+                            self.table_state.select(Some(0));
+                            self.recompute_activity_fail_filter();
+                            vec![]
+                        } else {
+                            let current_idx = statuses.iter().position(|s| *s == current).unwrap_or(0);
+                            let next_idx = (current_idx + 1) % statuses.len();
+                            self.filter.status = Some(statuses[next_idx]);
+                            self.table_state.select(Some(0));
+                            self.workflows = LoadState::Loading;
+                            self.workflows_loading = false;
+                            vec![self.load_workflows_effect()]
+                        }
+                    }
+                }
             }
             Action::PrevStatusFilter => {
+                // Reverse cycle: RUN←OK←W-FAIL←A-FAIL←CANC←TERM←TIME←CONT←RUN
                 let statuses = WorkflowStatus::all();
-                let prev_status = match self.filter.status {
-                    None => Some(statuses[statuses.len() - 1]),
-                    Some(current) => {
-                        let current_idx = statuses.iter().position(|s| *s == current).unwrap_or(0);
-                        let prev_idx = if current_idx == 0 {
-                            statuses.len() - 1
-                        } else {
-                            current_idx - 1
-                        };
-                        Some(statuses[prev_idx])
+                let afail_after = WorkflowStatus::Failed;
+                let afail_before_idx = statuses.iter().position(|s| *s == afail_after).unwrap_or(0) + 1;
+                let afail_before = statuses.get(afail_before_idx % statuses.len()).copied().unwrap_or(statuses[0]);
+                if self.activity_fail_filter {
+                    // A-FAIL → back to Failed
+                    self.activity_fail_filter = false;
+                    self.filter.status = Some(afail_after);
+                    self.table_state.select(Some(0));
+                    self.workflows = LoadState::Loading;
+                    self.workflows_loading = false;
+                    return vec![self.load_workflows_effect()];
+                }
+                match self.filter.status {
+                    None => {
+                        // None → last in cycle (ContinuedAsNew)
+                        self.filter.status = Some(statuses[statuses.len() - 1]);
+                        self.table_state.select(Some(0));
+                        self.workflows = LoadState::Loading;
+                        self.workflows_loading = false;
+                        vec![self.load_workflows_effect()]
                     }
-                };
-                self.filter.status = prev_status;
-                self.table_state.select(Some(0));
-                self.workflows = LoadState::Loading;
-                self.workflows_loading = false;
-                vec![self.load_workflows_effect()]
+                    Some(current) => {
+                        if current == afail_before {
+                            // Canceled → A-FAIL (client-side)
+                            self.filter.status = None;
+                            self.activity_fail_filter = true;
+                            self.table_state.select(Some(0));
+                            self.recompute_activity_fail_filter();
+                            vec![]
+                        } else {
+                            let current_idx = statuses.iter().position(|s| *s == current).unwrap_or(0);
+                            let prev_idx = if current_idx == 0 {
+                                statuses.len() - 1
+                            } else {
+                                current_idx - 1
+                            };
+                            self.filter.status = Some(statuses[prev_idx]);
+                            self.table_state.select(Some(0));
+                            self.workflows = LoadState::Loading;
+                            self.workflows_loading = false;
+                            vec![self.load_workflows_effect()]
+                        }
+                    }
+                }
             }
             Action::ToggleColumn(column) => {
                 if self.visible_columns.contains(&column) {
@@ -516,6 +607,8 @@ impl App {
                 self.filter = WorkflowFilter::new();
                 self.active_date_range_label = None;
                 self.type_name_filter = None;
+                self.activity_fail_filter = false;
+                self.activity_fail_filtered_indices.clear();
                 self.table_state.select(Some(0));
                 self.workflows = LoadState::Loading;
                 self.workflows_loading = false;
@@ -543,6 +636,7 @@ impl App {
                     if !self.filter_input.is_empty() {
                         self.filter = WorkflowFilter::from_query(&self.filter_input);
                         self.filter_input.clear();
+                        self.activity_fail_filter = false;
                         self.workflows = LoadState::Loading;
                         self.workflows_loading = false;
                         vec![self.load_workflows_effect()]
@@ -1208,18 +1302,18 @@ impl App {
             Action::Quit => {
                 let now = Instant::now();
                 if let Some(last_attempt) = self.last_quit_attempt {
-                    // If second Ctrl+C within 2 seconds, quit
+                    // If second quit within 2 seconds, quit
                     if now.duration_since(last_attempt).as_secs() < 2 {
                         self.should_quit = true;
                     } else {
                         // Too much time passed, reset and show message
                         self.last_quit_attempt = Some(now);
-                        self.last_error = Some("Press Ctrl+C again to quit".to_string());
+                        self.last_error = Some("Press q again to quit".to_string());
                     }
                 } else {
-                    // First Ctrl+C, show message
+                    // First quit attempt, show message
                     self.last_quit_attempt = Some(now);
-                    self.last_error = Some("Press Ctrl+C again to quit".to_string());
+                    self.last_error = Some("Press q again to quit".to_string());
                 }
                 vec![]
             }
@@ -1294,6 +1388,23 @@ impl App {
                                 let selected = self.table_state.selected().unwrap_or(0);
                                 if selected >= wfs.len() && !wfs.is_empty() {
                                     self.table_state.select(Some(wfs.len() - 1));
+                                }
+                            }
+                            // Trigger activity failure scan for all loaded (filtered) workflows
+                            self.activity_fail_ids.clear();
+                            self.activity_fail_scanning = true;
+                            self.activity_fail_scan_gen += 1;
+                            self.activity_fail_filtered_indices.clear();
+                            if let LoadState::Loaded(ref wfs) = self.workflows {
+                                let pairs: Vec<(String, String)> = wfs
+                                    .iter()
+                                    .map(|wf| (wf.workflow_id.clone(), wf.run_id.clone()))
+                                    .collect();
+                                if !pairs.is_empty() {
+                                    return vec![Effect::ScanActivityFails {
+                                        workflows: pairs,
+                                        gen: self.activity_fail_scan_gen,
+                                    }];
                                 }
                             }
                         }
@@ -1379,6 +1490,24 @@ impl App {
                     DataPayload::InsightsProgress(phase, gen) => {
                         if gen == self.insights_scan_gen {
                             self.insights_progress = Some(phase);
+                        }
+                    }
+                    DataPayload::ActivityFailPartial(ids, gen) => {
+                        if gen == self.activity_fail_scan_gen {
+                            self.activity_fail_ids = ids;
+                            // Keep scanning = true; show partial count
+                            if self.activity_fail_filter {
+                                self.recompute_activity_fail_filter();
+                            }
+                        }
+                    }
+                    DataPayload::ActivityFailIds(ids, gen) => {
+                        if gen == self.activity_fail_scan_gen {
+                            self.activity_fail_ids = ids;
+                            self.activity_fail_scanning = false;
+                            if self.activity_fail_filter {
+                                self.recompute_activity_fail_filter();
+                            }
                         }
                     }
                 }
@@ -1553,6 +1682,10 @@ impl App {
                 }
             }
             _ => {
+                // WorkflowList: A-FAIL filter uses client-side filtering
+                if self.activity_fail_filter {
+                    return self.activity_fail_filtered_indices.len();
+                }
                 if let LoadState::Loaded(ref workflows) = self.workflows {
                     workflows.len()
                 } else {
@@ -1778,7 +1911,7 @@ impl App {
         }
     }
 
-    /// Translate a visual selection index through search_filtered_indices when search is active.
+    /// Translate a visual selection index through filtered indices when search or A-FAIL filter is active.
     /// Returns the original data index.
     fn translate_selection(&self, visual_index: usize) -> usize {
         if self.search_query.is_some() && !self.search_filtered_indices.is_empty() {
@@ -1786,8 +1919,28 @@ impl App {
                 .get(visual_index)
                 .copied()
                 .unwrap_or(visual_index)
+        } else if self.activity_fail_filter
+            && self.view == View::WorkflowList
+            && !self.activity_fail_filtered_indices.is_empty()
+        {
+            self.activity_fail_filtered_indices
+                .get(visual_index)
+                .copied()
+                .unwrap_or(visual_index)
         } else {
             visual_index
+        }
+    }
+
+    /// Compute which workflow indices belong to activity_fail_ids
+    fn recompute_activity_fail_filter(&mut self) {
+        self.activity_fail_filtered_indices.clear();
+        if let LoadState::Loaded(ref wfs) = self.workflows {
+            for (i, wf) in wfs.iter().enumerate() {
+                if self.activity_fail_ids.contains(&wf.workflow_id) {
+                    self.activity_fail_filtered_indices.push(i);
+                }
+            }
         }
     }
 
@@ -2014,6 +2167,10 @@ pub enum Effect {
     },
     CancelWorkflow(String),
     TerminateWorkflow(String),
+    ScanActivityFails {
+        workflows: Vec<(String, String)>,
+        gen: u64,
+    },
     CopyToClipboard(String),
     OpenInBrowser(String),
 }
@@ -2106,7 +2263,7 @@ mod tests {
         // First quit shows warning
         app.update(Action::Quit);
         assert!(!app.should_quit);
-        assert_eq!(app.last_error, Some("Press Ctrl+C again to quit".to_string()));
+        assert_eq!(app.last_error, Some("Press q again to quit".to_string()));
 
         // Second quit actually quits
         app.update(Action::Quit);

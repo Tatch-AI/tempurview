@@ -40,7 +40,7 @@ impl HelpBar {
                 ("I", "Insights"),
                 ("/", "Search"),
                 ("f", "Filter"),
-                ("1-7", "Status"),
+                ("1-8", "Status"),
                 ("r", "Refresh"),
                 ("?", "Help"),
             ],
@@ -194,11 +194,12 @@ Filtering:
   f           Open Temporal filter (list views)
   1           Filter: Running
   2           Filter: Completed
-  3           Filter: Failed
-  4           Filter: Canceled
-  5           Filter: Terminated
-  6           Filter: TimedOut
-  7           Filter: ContinuedAsNew
+  3           Filter: W-FAIL (workflow failed)
+  4           Filter: A-FAIL (activity failures)
+  5           Filter: Canceled
+  6           Filter: Terminated
+  7           Filter: TimedOut
+  8           Filter: ContinuedAsNew
   0           Clear all filters
   ]           Next status filter
   [           Previous status filter

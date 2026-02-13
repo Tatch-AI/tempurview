@@ -7,6 +7,10 @@ pub async fn handle(config: &Config) -> color_eyre::Result<()> {
     info!("Running connection test");
     println!("Testing Temporal connection...\n");
 
+    if let Some(ref profile) = config.active_profile {
+        println!("Using profile: {}\n", profile);
+    }
+
     if config.use_mock {
         println!("Using mock client (--mock flag set).");
         let client = MockTemporalClient::with_random_data(config.mock_workflow_count);

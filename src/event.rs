@@ -187,6 +187,7 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 },
                 KeyCode::Esc => Some(Action::GoBack),
                 // Status filter shortcuts (number keys) — WorkflowList only
+                // 1=RUN, 2=OK, 3=W-FAIL, 4=A-FAIL, 5=CANC, 6=TERM, 7=TIME, 8=CONT
                 KeyCode::Char('1') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Running,
                 ))),
@@ -196,16 +197,17 @@ pub fn key_to_action(key: KeyEvent, view: View, input_mode: InputMode) -> Option
                 KeyCode::Char('3') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Failed,
                 ))),
-                KeyCode::Char('4') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('4') if view == View::WorkflowList => Some(Action::SetActivityFailFilter),
+                KeyCode::Char('5') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Canceled,
                 ))),
-                KeyCode::Char('5') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('6') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::Terminated,
                 ))),
-                KeyCode::Char('6') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('7') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::TimedOut,
                 ))),
-                KeyCode::Char('7') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
+                KeyCode::Char('8') if view == View::WorkflowList => Some(Action::SetStatusFilter(Some(
                     crate::domain::WorkflowStatus::ContinuedAsNew,
                 ))),
                 KeyCode::Char('0') if view == View::WorkflowList => Some(Action::ClearFilters),
