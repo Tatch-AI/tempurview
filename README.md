@@ -235,6 +235,12 @@ TemPurview follows **The Elm Architecture** (TEA): every keypress produces an `A
 
 See the [design docs](design-docs/) for slide decks on philosophy, architecture, and CLI design.
 
+### Deep context & estate map
+
+- [Business context](docs/BUSINESS_CONTEXT.md) — what this tool is for in Harper's platform, who uses it, operational status.
+- [Architecture](docs/ARCHITECTURE.md) — entrypoints, routes, Temporal integration, config, release story.
+- Chorograph estate map: `npx chorograph render . --no-open` (annotations in `chorograph/`).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development workflow, and project structure.
