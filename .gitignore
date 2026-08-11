@@ -2,3 +2,4 @@ target/
 .env
 docs/book/
 design-docs/*.html
+.chorograph/
